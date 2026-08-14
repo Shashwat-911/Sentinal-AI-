@@ -1,0 +1,9 @@
+ultralytics
+opencv-python
+PyYAML
+Pillow
+matplotlib
+numpy
+reportlab
+openpyxl
+

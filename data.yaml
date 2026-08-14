@@ -1,0 +1,6 @@
+train: dataset/train/images
+val: dataset/val/images
+test: dataset/test/images
+
+nc: 1
+names: ['luggage']
