@@ -34,7 +34,7 @@ except ImportError:
     HAS_WINSOUND = False
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# GLOBAL STYLE CONSTANTS
+# GLOBAL STYLE & CONFIGURATION CONSTANTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 BG       = "#0a0a0a"
@@ -52,8 +52,37 @@ FONT_SMALL   = ("Consolas", 9)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+
+class SentinelConfig:
+    # Tunable behavior thresholds
+    LOITER_THRESHOLD = 20.0             # seconds
+    LOITER_SPATIAL_RATIO = 0.15         # fraction of frame diagonal for spatial spread
+    STATIONARY_THRESHOLD = 15.0         # seconds before a bag is considered unattended
+    STATIONARY_DISPLACEMENT_RATIO = 0.02  # fraction of frame diagonal for stationary check
+    SPEED_RATIO_THRESHOLD = 2.5         # ratio compared to historical speed
+    SPEED_ABSOLUTE_MIN_RATIO = 0.10     # fraction of frame diagonal per second (minimum speed floor)
+    PROXIMITY_RATIO = 0.30              # fraction of frame diagonal for person-object proximity
+    ALERT_COOLDOWN = 10.0               # seconds between alerts for same entity + behavior
+    TRACK_TIMEOUT = 3.0                 # seconds to keep missing tracks
+    
+    # Pacing / repeated movement thresholds (normalized to frame diagonal)
+    PACING_MIN_MOVEMENT_RATIO = 0.02    # minimum movement per segment (was 0.006)
+    PACING_MAX_NET_DISP_RATIO = 0.30    # maximum net displacement
+    PACING_MIN_PATH_RATIO = 0.60        # minimum cumulative path length
+    PACING_COMPARISON_WINDOW = 1.0      # seconds to look back for direction comparison
+    
+    # Restricted zone normalized polygon coordinates (0.0 to 1.0 relative to width/height)
+    RESTRICTED_ZONE_ENABLED = True
+    RESTRICTED_ZONE_COORDS = [
+        (0.55, 0.15),
+        (0.95, 0.15),
+        (0.95, 0.70),
+        (0.55, 0.70)
+    ]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# SHARED UTILITY FUNCTIONS
+# SHARED UTILITY & DETECTION FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -61,7 +90,7 @@ def load_dual_models(base_dir):
     """
     Load two models:
     1. bag_model: best.pt from models/train/weights/best.pt or models/best.pt
-    2. person_model: yolov9s.pt from project root (COCO pretrained, person class only)
+    2. person_model: yolov9s.pt from project root (COCO pretrained)
     Returns (bag_model, person_model, status_string)
     """
     import torch
@@ -107,8 +136,40 @@ def load_dual_models(base_dir):
     return bag_model, person_model, status
 
 
+# ════════════════════════════════════════════════════════════════════════════════
+# OBJECT NORMALIZATION UTILITIES
+# ════════════════════════════════════════════════════════════════════════════════
+
+# Semantic object groups for cross-model consistency
+# Model class names -> internal semantic group
+OBJECT_GROUP_MAP = {
+    "luggage": "BAG_OBJECT",
+    "backpack": "BAG_OBJECT",
+    "handbag": "BAG_OBJECT",
+    "suitcase": "BAG_OBJECT",
+    "person": "PERSON",
+}
+
+def get_object_group(class_name):
+    """Map a model class name to its semantic object group."""
+    return OBJECT_GROUP_MAP.get(class_name, "OTHER")
+
+def is_bag_object(class_name):
+    """Check if a class name belongs to the BAG_OBJECT group."""
+    return get_object_group(class_name) == "BAG_OBJECT"
+
+def is_person(class_name):
+    """Check if a class name belongs to the PERSON group."""
+    return get_object_group(class_name) == "PERSON"
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# SHARED UTILITY & DETECTION FUNCTIONS
+# ════════════════════════════════════════════════════════════════════════════════
+
+
 def detect_bags(frame, model, conf, device=None):
-    """Run bag model inference. Returns list of (x1,y1,x2,y2,confidence)."""
+    """Run bag model inference. Returns list of (x1, y1, x2, y2, confidence, class_name)."""
     if model is None or frame is None:
         return []
     import torch
@@ -117,301 +178,658 @@ def detect_bags(frame, model, conf, device=None):
     results = model(frame, conf=conf, device=device, verbose=False)
     detections = []
     for r in results:
+        names = r.names
         for box in r.boxes:
             x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-            detections.append((int(x1), int(y1), int(x2), int(y2), float(box.conf[0])))
+            cls_id = int(box.cls[0])
+            cls_name = names.get(cls_id, "luggage")
+            detections.append((int(x1), int(y1), int(x2), int(y2), float(box.conf[0]), cls_name))
     return detections
 
 
 def detect_persons(frame, model, conf=0.4, device=None):
-    """Run person model inference. Returns list of (x1,y1,x2,y2,confidence).
-    Only returns class 0 (person) from COCO model."""
+    """Run person model inference. Returns list of (x1, y1, x2, y2, confidence, class_name).
+    Detects class 0 (person), 24 (backpack), 26 (handbag), 28 (suitcase) from COCO model."""
     if model is None or frame is None:
         return []
     import torch
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    results = model(frame, conf=conf, classes=[0], device=device, verbose=False)
+    
+    # We load standard COCO categories: person (0), backpack (24), handbag (26), suitcase (28)
+    results = model(frame, conf=conf, classes=[0, 24, 26, 28], device=device, verbose=False)
     detections = []
     for r in results:
+        names = r.names
         for box in r.boxes:
             x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-            detections.append((int(x1), int(y1), int(x2), int(y2), float(box.conf[0])))
+            cls_id = int(box.cls[0])
+            cls_name = names.get(cls_id, "person")
+            detections.append((int(x1), int(y1), int(x2), int(y2), float(box.conf[0]), cls_name))
     return detections
 
 
-def match_bag_centroids(detections, tracked_bags, threshold=80, max_missing_sec=3.0):
-    """Match bag detections to existing tracked bags with stale track cleanup."""
+def calculate_iou(box1, box2):
+    """Calculate Intersection-over-Union (IoU) of two bounding boxes."""
+    x1_1, y1_1, x2_1, y2_1 = box1[:4]
+    x1_2, y1_2, x2_2, y2_2 = box2[:4]
+    
+    xi1 = max(x1_1, x1_2)
+    yi1 = max(y1_1, y1_2)
+    xi2 = min(x2_1, x2_2)
+    yi2 = min(y2_1, y2_2)
+    
+    inter_area = max(0, xi2 - xi1) * max(0, yi2 - yi1)
+    box1_area = (x2_1 - x1_1) * (y2_1 - y1_1)
+    box2_area = (x2_2 - x1_2) * (y2_2 - y1_2)
+    union_area = box1_area + box2_area - inter_area
+    if union_area == 0:
+        return 0.0
+    return inter_area / union_area
+
+
+def iou_deduplicate(detections, iou_thresh=0.5, cross_class_iou_thresh=0.3):
+    """
+    Remove duplicate boxes belonging to similar semantic classes.
+    Uses object_group normalization for cross-model consistency.
+    Also suppresses bag-class detections that heavily overlap a person detection
+    (cross-model false positive suppression).
+    """
+    if len(detections) <= 1:
+        return detections
+    
+    # Sort by confidence descending
+    sorted_dets = sorted(detections, key=lambda x: x[4], reverse=True)
+    kept = []
+    
+    for det in sorted_dets:
+        discard = False
+        det_group = get_object_group(det[5])
+        for k in kept:
+            k_group = get_object_group(k[5])
+            
+            # 1. Same semantic group deduplication (e.g., BAG_OBJECT vs BAG_OBJECT)
+            # This handles cross-model duplicates like luggage (best.pt) vs suitcase (yolov9s)
+            if det_group == "BAG_OBJECT" and k_group == "BAG_OBJECT":
+                if calculate_iou(det, k) > iou_thresh:
+                    discard = True
+                    break
+            # 2. Cross-class suppression: BAG_OBJECT detection overlapping a PERSON
+            # If a bag detection overlaps a person, it's likely a false positive
+            # (person body part misclassified as bag). Use stricter criteria:
+            # - High IoU (> cross_class_iou_thresh)
+            # - Low confidence bag detection (< 0.5)
+            elif (det_group == "BAG_OBJECT" and k_group == "PERSON") or \
+                 (det_group == "PERSON" and k_group == "BAG_OBJECT"):
+                if calculate_iou(det, k) > cross_class_iou_thresh:
+                    bag_det = det if det_group == "BAG_OBJECT" else k
+                    bag_conf = bag_det[4]
+                    # Only suppress low-confidence bag detections overlapping person
+                    if bag_conf < 0.5:
+                        if det_group == "BAG_OBJECT":
+                            discard = True
+                            break
+                        else:
+                            # det is person, k is bag - remove the bag from kept
+                            kept.remove(k)
+        if not discard:
+            kept.append(det)
+            
+    return kept
+
+
+def match_entities(detections, tracked_entities, threshold=100, max_missing_sec=3.0):
+    """
+    Unified multi-class centroid tracker with semantic group matching.
+    Detections: list of (x1, y1, x2, y2, confidence, class_name)
+    Tracked Entities: dict mapping key (e.g. 'BAG_OBJECT_1') to state dictionary
+    """
     current_time = time.time()
     new_tracked = {}
-    used_old_ids = set()
+    used_keys = set()
 
-    for (x1, y1, x2, y2, conf) in detections:
+    for (x1, y1, x2, y2, conf, class_name) in detections:
         cx = (x1 + x2) / 2.0
         cy = (y1 + y2) / 2.0
-        best_id, best_dist = None, threshold
+        best_key, best_dist = None, threshold
+        
+        det_group = get_object_group(class_name)
 
-        for bag_id, info in tracked_bags.items():
-            if bag_id in used_old_ids:
+        # Greedy match among existing targets of the SAME SEMANTIC GROUP
+        for key, info in tracked_entities.items():
+            if get_object_group(info["class_name"]) != det_group:
+                continue
+            if key in used_keys:
                 continue
             bx1, by1, bx2, by2 = info["bbox"]
-            dist = math.sqrt((cx - (bx1+bx2)/2)**2 + (cy - (by1+by2)/2)**2)
+            bcx = (bx1 + bx2) / 2.0
+            bcy = (by1 + by2) / 2.0
+            dist = math.sqrt((cx - bcx)**2 + (cy - bcy)**2)
             if dist < best_dist:
                 best_dist = dist
-                best_id = bag_id
+                best_key = key
 
-        if best_id is not None:
-            used_old_ids.add(best_id)
-            old_x1, old_y1, old_x2, old_y2 = tracked_bags[best_id]["bbox"]
+        if best_key is not None:
+            used_keys.add(best_key)
+            old_info = tracked_entities[best_key]
+            
+            # EMA Smoothing (75% current + 25% previous)
+            old_x1, old_y1, old_x2, old_y2 = old_info["bbox"]
             smooth_x1 = int(0.75 * x1 + 0.25 * old_x1)
             smooth_y1 = int(0.75 * y1 + 0.25 * old_y1)
             smooth_x2 = int(0.75 * x2 + 0.25 * old_x2)
             smooth_y2 = int(0.75 * y2 + 0.25 * old_y2)
 
-            new_tracked[best_id] = {
+            history = old_info.get("history", []).copy()
+            history.append((cx, cy, current_time))
+            if len(history) > 300:
+                history.pop(0)
+
+            # Instantaneous and smoothed speed
+            speed = old_info.get("speed", 0.0)
+            if len(history) >= 2:
+                dx = cx - history[-2][0]
+                dy = cy - history[-2][1]
+                dt = current_time - history[-2][2]
+                if dt > 0:
+                    inst_speed = math.sqrt(dx**2 + dy**2) / dt
+                    speed = 0.7 * speed + 0.3 * inst_speed
+
+            # Preserve the old key (stable identity) but update class_name to latest observation
+            new_tracked[best_key] = {
+                "track_id": old_info["track_id"],
+                "class_name": class_name,  # Update to latest observed class
+                "confidence": conf,
                 "bbox": (smooth_x1, smooth_y1, smooth_x2, smooth_y2),
-                "conf": conf,
-                "first_seen": tracked_bags[best_id]["first_seen"],
+                "centroid": (cx, cy),
+                "history": history,
+                "first_seen": old_info["first_seen"],
                 "last_seen": current_time,
-                "is_alerted": tracked_bags[best_id]["is_alerted"],
-                "alert_dismissed": tracked_bags[best_id].get("alert_dismissed", False),
-                "risk_score": tracked_bags[best_id].get("risk_score", 0),
-                "owner_returned_at": tracked_bags[best_id].get("owner_returned_at", None),
-                "return_msg_frames": tracked_bags[best_id].get("return_msg_frames", 0),
+                "speed": speed,
+                "active_threats": old_info.get("active_threats", set()),
+                "alert_dismissed": old_info.get("alert_dismissed", False),
+                "last_alert_time": old_info.get("last_alert_time", 0.0),
+                "risk_score": old_info.get("risk_score", 0),
+                "severity": old_info.get("severity", "LOW"),
+                "stationary_start": old_info.get("stationary_start", None),
+                "last_move_time": old_info.get("last_move_time", current_time),
+                "nearest_person_id": old_info.get("nearest_person_id", None),
+                "last_proximity_time": old_info.get("last_proximity_time", current_time),
+                "direction_reversals": old_info.get("direction_reversals", []),
+                "consecutive_running_frames": old_info.get("consecutive_running_frames", 0),
+                "consecutive_restricted_frames": old_info.get("consecutive_restricted_frames", 0),
             }
         else:
-            all_ids = list(tracked_bags.keys()) + list(new_tracked.keys())
+            # Generate new track ID within the semantic group
+            existing_ids = [
+                info["track_id"] 
+                for info in tracked_entities.values() 
+                if get_object_group(info["class_name"]) == det_group
+            ]
+            new_ids = [
+                info["track_id"] 
+                for info in new_tracked.values() 
+                if get_object_group(info["class_name"]) == det_group
+            ]
+            all_ids = existing_ids + new_ids
             new_id = (max(all_ids) + 1) if all_ids else 1
-            new_tracked[new_id] = {
+
+            # Use semantic group in key for stable identity across class changes
+            key = f"{det_group}_{new_id}"
+            new_tracked[key] = {
+                "track_id": new_id,
+                "class_name": class_name,
+                "confidence": conf,
                 "bbox": (x1, y1, x2, y2),
-                "conf": conf,
+                "centroid": (cx, cy),
+                "history": [(cx, cy, current_time)],
                 "first_seen": current_time,
                 "last_seen": current_time,
-                "is_alerted": False,
+                "speed": 0.0,
+                "active_threats": set(),
                 "alert_dismissed": False,
+                "last_alert_time": 0.0,
                 "risk_score": 0,
-                "owner_returned_at": None,
-                "return_msg_frames": 0,
+                "severity": "LOW",
+                "stationary_start": None,
+                "last_move_time": current_time,
+                "nearest_person_id": None,
+                "last_proximity_time": current_time,
+                "direction_reversals": [],
+                "consecutive_running_frames": 0,
+                "consecutive_restricted_frames": 0,
             }
 
-    # Retain missing tracks briefly before purging
-    for bag_id, info in tracked_bags.items():
-        if bag_id not in used_old_ids and (current_time - info["last_seen"] < max_missing_sec):
-            new_tracked[bag_id] = info
+    # Keep missing tracks briefly before deletion timeout
+    for key, info in tracked_entities.items():
+        if key not in used_keys and (current_time - info["last_seen"] < max_missing_sec):
+            new_tracked[key] = info
 
     return new_tracked
+
+
+# Backward-compatibility wrappers for tests and app logic
+def match_bag_centroids(detections, tracked_bags, threshold=80, max_missing_sec=3.0):
+    """Adapt bag detections list and match using match_entities tracker."""
+    formatted_dets = []
+    for d in detections:
+        if len(d) == 5:
+            formatted_dets.append((d[0], d[1], d[2], d[3], d[4], "luggage"))
+        else:
+            formatted_dets.append(d)
+    
+    # Map tracked_bags to unified format
+    unified = {}
+    for bid, info in tracked_bags.items():
+        key = f"luggage_{bid}"
+        unified[key] = {
+            "track_id": bid,
+            "class_name": "luggage",
+            "confidence": info.get("conf", 0.8),
+            "bbox": info["bbox"],
+            "centroid": ((info["bbox"][0]+info["bbox"][2])/2.0, (info["bbox"][1]+info["bbox"][3])/2.0),
+            "first_seen": info["first_seen"],
+            "last_seen": info["last_seen"],
+            "active_threats": {"UNATTENDED_OBJECT"} if info.get("is_alerted") else set(),
+            "alert_dismissed": info.get("alert_dismissed", False),
+            "risk_score": info.get("risk_score", 0),
+            "stationary_start": info["first_seen"] if info.get("is_alerted") else None,
+            "last_proximity_time": info.get("owner_returned_at") or info["first_seen"],
+            "return_msg_frames": info.get("return_msg_frames", 0)
+        }
+        
+    res = match_entities(formatted_dets, unified, threshold, max_missing_sec)
+    
+    # Map back to tracked_bags format
+    output = {}
+    for key, val in res.items():
+        bid = val["track_id"]
+        output[bid] = {
+            "bbox": val["bbox"],
+            "conf": val["confidence"],
+            "first_seen": val["first_seen"],
+            "last_seen": val["last_seen"],
+            "is_alerted": "UNATTENDED_OBJECT" in val["active_threats"],
+            "alert_dismissed": val["alert_dismissed"],
+            "risk_score": val["risk_score"],
+            "owner_returned_at": val.get("last_proximity_time"),
+            "return_msg_frames": val.get("return_msg_frames", 0)
+        }
+    return output
 
 
 def match_person_centroids(detections, tracked_persons, threshold=100, max_missing_sec=3.0):
-    """Match person detections to existing tracked persons with stale track cleanup."""
-    current_time = time.time()
-    new_tracked = {}
-    used_old_ids = set()
-
-    for (x1, y1, x2, y2, conf) in detections:
-        cx = (x1 + x2) / 2.0
-        cy = (y1 + y2) / 2.0
-        best_id, best_dist = None, threshold
-
-        for pid, info in tracked_persons.items():
-            if pid in used_old_ids:
-                continue
-            bx1, by1, bx2, by2 = info["bbox"]
-            dist = math.sqrt((cx - (bx1+bx2)/2)**2 + (cy - (by1+by2)/2)**2)
-            if dist < best_dist:
-                best_dist = dist
-                best_id = pid
-
-        if best_id is not None:
-            used_old_ids.add(best_id)
-            old_x1, old_y1, old_x2, old_y2 = tracked_persons[best_id]["bbox"]
-            smooth_x1 = int(0.75 * x1 + 0.25 * old_x1)
-            smooth_y1 = int(0.75 * y1 + 0.25 * old_y1)
-            smooth_x2 = int(0.75 * x2 + 0.25 * old_x2)
-            smooth_y2 = int(0.75 * y2 + 0.25 * old_y2)
-
-            new_tracked[best_id] = {
-                "bbox": (smooth_x1, smooth_y1, smooth_x2, smooth_y2),
-                "conf": conf,
-                "first_seen": tracked_persons[best_id]["first_seen"],
-                "last_seen": current_time,
-                "dwell_seconds": current_time - tracked_persons[best_id]["first_seen"],
-                "is_loitering": tracked_persons[best_id].get("is_loitering", False),
-                "loiter_dismissed": tracked_persons[best_id].get("loiter_dismissed", False),
-            }
+    """Adapt person detections list and match using match_entities tracker."""
+    formatted_dets = []
+    for d in detections:
+        if len(d) == 5:
+            formatted_dets.append((d[0], d[1], d[2], d[3], d[4], "person"))
         else:
-            all_ids = list(tracked_persons.keys()) + list(new_tracked.keys())
-            new_id = (max(all_ids) + 1) if all_ids else 1
-            new_tracked[new_id] = {
-                "bbox": (x1, y1, x2, y2),
-                "conf": conf,
-                "first_seen": current_time,
-                "last_seen": current_time,
-                "dwell_seconds": 0,
-                "is_loitering": False,
-                "loiter_dismissed": False,
-            }
-
-    # Retain missing tracks briefly before purging
+            formatted_dets.append(d)
+            
+    unified = {}
     for pid, info in tracked_persons.items():
-        if pid not in used_old_ids and (current_time - info["last_seen"] < max_missing_sec):
-            new_tracked[pid] = info
-
-    return new_tracked
-
-
-def compute_risk_score(elapsed_seconds, alert_threshold):
-    """
-    Returns (risk_score 0-100, severity_label, color_bgr).
-    LOW: 0-33, MEDIUM: 34-66, HIGH: 67-99, CRITICAL: 100
-    """
-    ratio = elapsed_seconds / max(alert_threshold, 1)
-    score = min(int(ratio * 100), 100)
-
-    if score < 34:
-        return score, "LOW", (0, 200, 100)       # green BGR
-    elif score < 67:
-        return score, "MEDIUM", (0, 165, 255)     # orange BGR
-    elif score < 100:
-        return score, "HIGH", (0, 60, 255)        # red-orange BGR
-    else:
-        return score, "CRITICAL", (0, 0, 255)     # pure red BGR
+        key = f"person_{pid}"
+        unified[key] = {
+            "track_id": pid,
+            "class_name": "person",
+            "confidence": info.get("conf", 0.8),
+            "bbox": info["bbox"],
+            "centroid": ((info["bbox"][0]+info["bbox"][2])/2.0, (info["bbox"][1]+info["bbox"][3])/2.0),
+            "first_seen": info["first_seen"],
+            "last_seen": info["last_seen"],
+            "active_threats": {"LOITERING"} if info.get("is_loitering") else set(),
+            "alert_dismissed": info.get("loiter_dismissed", False),
+            "dwell_seconds": info.get("dwell_seconds", 0)
+        }
+        
+    res = match_entities(formatted_dets, unified, threshold, max_missing_sec)
+    
+    output = {}
+    for key, val in res.items():
+        pid = val["track_id"]
+        output[pid] = {
+            "bbox": val["bbox"],
+            "conf": val["confidence"],
+            "first_seen": val["first_seen"],
+            "last_seen": val["last_seen"],
+            "dwell_seconds": val["last_seen"] - val["first_seen"],
+            "is_loitering": "LOITERING" in val["active_threats"],
+            "loiter_dismissed": val["alert_dismissed"]
+        }
+    return output
 
 
 def check_owner_return(tracked_bags, tracked_persons, return_radius=150):
+    """Check proximity owner return. Thin wrapper returning reset bag IDs."""
+    # This is handled directly in our behavior analyzer engine now.
+    return set()
+
+
+def calculate_entity_risk(track):
+    """Calculate overall risk score (0-100), severity label and BGR color."""
+    threats = track.get("active_threats", set())
+    if not threats or track.get("alert_dismissed", False):
+        return 0, "NORMAL", (180, 180, 0)
+        
+    max_score = 0
+    if "LOITERING" in threats:
+        max_score = max(max_score, 40)
+    if "REPEATED_MOVEMENT" in threats:
+        max_score = max(max_score, 50)
+    if "SUDDEN_RUNNING" in threats:
+        max_score = max(max_score, 70)
+    if "RESTRICTED_ZONE" in threats:
+        max_score = max(max_score, 85)
+    if "UNATTENDED_OBJECT" in threats:
+        elapsed = time.time() - (track.get("stationary_start") or time.time())
+        ratio = elapsed / SentinelConfig.STATIONARY_THRESHOLD
+        obj_score = min(int(ratio * 100), 100)
+        max_score = max(max_score, obj_score)
+
+    if max_score < 34:
+        return max_score, "LOW", (0, 200, 100)       # green BGR
+    elif max_score < 67:
+        return max_score, "MEDIUM", (0, 165, 255)     # orange BGR
+    elif max_score < 100:
+        return max_score, "HIGH", (0, 60, 255)        # red-orange BGR
+    else:
+        return max_score, "CRITICAL", (0, 0, 255)     # pure red BGR
+
+
+def analyze_behaviors(tracked_entities, w, h):
     """
-    For each alerted bag, check if any person has come within return_radius pixels.
-    If yes: cancel the alert, reset timer, show return message for 90 frames.
-    Returns set of bag_ids where owner just returned.
+    Central suspicious behavior rule evaluation engine.
+    Modifies tracked_entities in-place.
     """
-    returned_ids = set()
     current_time = time.time()
+    
+    # Pre-compute frame diagonal for normalized thresholds
+    frame_diag = math.sqrt(w * w + h * h)
+    
+    # Normalized thresholds (pixels)
+    loiter_spatial_thresh = SentinelConfig.LOITER_SPATIAL_RATIO * frame_diag
+    stationary_disp_thresh = SentinelConfig.STATIONARY_DISPLACEMENT_RATIO * frame_diag
+    proximity_thresh = SentinelConfig.PROXIMITY_RATIO * frame_diag
+    speed_abs_min = SentinelConfig.SPEED_ABSOLUTE_MIN_RATIO * frame_diag
+    pacing_min_mov = SentinelConfig.PACING_MIN_MOVEMENT_RATIO * frame_diag
+    pacing_max_net_disp = SentinelConfig.PACING_MAX_NET_DISP_RATIO * frame_diag
+    pacing_min_path = SentinelConfig.PACING_MIN_PATH_RATIO * frame_diag
+    pacing_compare_window = SentinelConfig.PACING_COMPARISON_WINDOW
+    
+    persons = {key: info for key, info in tracked_entities.items() if is_person(info["class_name"])}
+    objects = {key: info for key, info in tracked_entities.items() if is_bag_object(info["class_name"])}
+    
+    # 1. Proximity Association and Unattended Luggage Engine
+    for obj_key, obj_info in objects.items():
+        ocx, ocy = obj_info["centroid"]
+        
+        # Find distance to closest person
+        min_dist = float('inf')
+        nearest_person_key = None
+        for p_key, p_info in persons.items():
+            pcx, pcy = p_info["centroid"]
+            dist = math.sqrt((ocx - pcx)**2 + (ocy - pcy)**2)
+            if dist < min_dist:
+                min_dist = dist
+                nearest_person_key = p_key
 
-    for bag_id, bag_info in tracked_bags.items():
-        if not bag_info.get("is_alerted") or bag_info.get("alert_dismissed"):
-            continue
-        if bag_info.get("owner_returned_at") is not None:
-            continue  # already handling return
+        if min_dist <= proximity_thresh:
+            # Nearest person is nearby — update proximity association
+            obj_info["nearest_person_id"] = nearest_person_key
+            obj_info["last_proximity_time"] = current_time
+            if "UNATTENDED_OBJECT" in obj_info["active_threats"]:
+                obj_info["active_threats"].discard("UNATTENDED_OBJECT")
+                obj_info["stationary_start"] = None
+        else:
+            # Stationary Check: verify if the object hasn't moved significantly
+            history = obj_info["history"]
+            if len(history) >= 10:
+                recent_pts = [pt[:2] for pt in history[-10:]]
+                xs = [c[0] for c in recent_pts]
+                ys = [c[1] for c in recent_pts]
+                displacement = math.sqrt((max(xs) - min(xs))**2 + (max(ys) - min(ys))**2)
+                if displacement < stationary_disp_thresh:
+                    if obj_info["stationary_start"] is None:
+                        obj_info["stationary_start"] = current_time
+                else:
+                    obj_info["stationary_start"] = None
+                    obj_info["active_threats"].discard("UNATTENDED_OBJECT")
+            else:
+                if obj_info["stationary_start"] is None:
+                    obj_info["stationary_start"] = current_time
 
-        bx1, by1, bx2, by2 = bag_info["bbox"]
-        bcx = (bx1 + bx2) / 2.0
-        bcy = (by1 + by2) / 2.0
+            # Flag unattended threat if stationary duration exceeds threshold
+            if obj_info["stationary_start"] is not None:
+                elapsed_unattended = current_time - obj_info["last_proximity_time"]
+                if elapsed_unattended >= SentinelConfig.STATIONARY_THRESHOLD:
+                    obj_info["active_threats"].add("UNATTENDED_OBJECT")
 
-        for pid, person_info in tracked_persons.items():
-            px1, py1, px2, py2 = person_info["bbox"]
-            pcx = (px1 + px2) / 2.0
-            pcy = (py1 + py2) / 2.0
-            dist = math.sqrt((bcx - pcx)**2 + (bcy - pcy)**2)
+    # 2. Person Movement Behavior Rules
+    for p_key, p_info in persons.items():
+        pcx, pcy = p_info["centroid"]
+        history = p_info["history"]
 
-            if dist <= return_radius:
-                # Owner returned — cancel alert, reset state
-                bag_info["is_alerted"] = False
-                bag_info["alert_dismissed"] = False
-                bag_info["risk_score"] = 0
-                bag_info["first_seen"] = current_time  # reset timer
-                bag_info["owner_returned_at"] = current_time
-                bag_info["return_msg_frames"] = 90  # show message for 90 frames
-                returned_ids.add(bag_id)
-                break
+        # A. Restricted Zone Entry Check
+        inside_zone = False
+        if SentinelConfig.RESTRICTED_ZONE_ENABLED:
+            poly_pts = np.array([
+                [int(pt[0] * w), int(pt[1] * h)] for pt in SentinelConfig.RESTRICTED_ZONE_COORDS
+            ], dtype=np.int32)
+            dist_to_poly = cv2.pointPolygonTest(poly_pts, (pcx, pcy), False)
+            if dist_to_poly >= 0:
+                inside_zone = True
 
-    return returned_ids
+        if inside_zone:
+            p_info["consecutive_restricted_frames"] += 1
+            if p_info["consecutive_restricted_frames"] >= 8:  # Temporal persistence (8 frames)
+                p_info["active_threats"].add("RESTRICTED_ZONE")
+        else:
+            p_info["consecutive_restricted_frames"] = 0
+            p_info["active_threats"].discard("RESTRICTED_ZONE")
+
+        # B. Prolonged Loitering Check
+        recent_pts = [pt for pt in history if current_time - pt[2] <= SentinelConfig.LOITER_THRESHOLD]
+        total_time = current_time - p_info["first_seen"]
+        
+        if total_time >= SentinelConfig.LOITER_THRESHOLD and len(recent_pts) >= 5:
+            xs = [pt[0] for pt in recent_pts]
+            ys = [pt[1] for pt in recent_pts]
+            max_spread = math.sqrt((max(xs) - min(xs))**2 + (max(ys) - min(ys))**2)
+            if max_spread < loiter_spatial_thresh:  # Remained within spatial threshold
+                p_info["active_threats"].add("LOITERING")
+            else:
+                p_info["active_threats"].discard("LOITERING")
+
+        # C. Sudden Running Check
+        speed = p_info["speed"]
+        past_pts = [pt for pt in history if 2.0 <= current_time - pt[2] <= 7.0]
+        if len(past_pts) >= 10:
+            past_speeds = []
+            for i in range(1, len(past_pts)):
+                dx = past_pts[i][0] - past_pts[i-1][0]
+                dy = past_pts[i][1] - past_pts[i-1][1]
+                dt = past_pts[i][2] - past_pts[i-1][2]
+                if dt > 0:
+                    past_speeds.append(math.sqrt(dx**2 + dy**2) / dt)
+            if past_speeds:
+                avg_past_speed = sum(past_speeds) / len(past_speeds)
+                # Rapid if absolute speed exceeds normalized floor AND is 2.5x normal speed
+                if speed > speed_abs_min and speed >= SentinelConfig.SPEED_RATIO_THRESHOLD * max(avg_past_speed, speed_abs_min * 0.125):
+                    p_info["consecutive_running_frames"] += 1
+                    if p_info["consecutive_running_frames"] >= 8:
+                        p_info["active_threats"].add("SUDDEN_RUNNING")
+                else:
+                    p_info["consecutive_running_frames"] = 0
+                    p_info["active_threats"].discard("SUDDEN_RUNNING")
+        else:
+            # Fallback to absolute speed if history is short
+            if speed > speed_abs_min * 1.5:
+                p_info["consecutive_running_frames"] += 1
+                if p_info["consecutive_running_frames"] >= 15:
+                    p_info["active_threats"].add("SUDDEN_RUNNING")
+            else:
+                p_info["consecutive_running_frames"] = 0
+
+        # D. Repeated Back-and-Forth Movement (Pacing) — 2D direction analysis
+        if len(history) >= 20:
+            reversals = p_info.get("direction_reversals", [])
+            reversals = [r for r in reversals if current_time - r <= 15.0]
+            
+            # Use time-based comparison window instead of fixed frame indices
+            # Find points approximately pacing_compare_window seconds apart
+            if len(history) >= 5:
+                # Look for a point approximately pacing_compare_window seconds ago
+                target_time_current = current_time
+                target_time_prev = current_time - pacing_compare_window
+                target_time_earlier = current_time - 2 * pacing_compare_window
+                
+                # Find closest history points to these target times
+                idx_current = len(history) - 1
+                idx_prev = None
+                idx_earlier = None
+                
+                for i in range(len(history) - 1, -1, -1):
+                    if idx_prev is None and history[i][2] <= target_time_prev:
+                        idx_prev = i
+                    if idx_earlier is None and history[i][2] <= target_time_earlier:
+                        idx_earlier = i
+                        break
+                
+                # Fallback to fixed indices if time-based lookup fails
+                if idx_prev is None:
+                    idx_prev = max(0, len(history) - 3)
+                if idx_earlier is None:
+                    idx_earlier = max(0, len(history) - 5)
+                
+                dx_current = history[idx_current][0] - history[idx_prev][0]
+                dy_current = history[idx_current][1] - history[idx_prev][1]
+                dx_prev = history[idx_prev][0] - history[idx_earlier][0]
+                dy_prev = history[idx_prev][1] - history[idx_earlier][1]
+                
+                mag_current = math.hypot(dx_current, dy_current)
+                mag_prev = math.hypot(dx_prev, dy_prev)
+                
+                # Check 2D directional reversal (dot product negative = >90 degree turn)
+                if mag_current > pacing_min_mov and mag_prev > pacing_min_mov:
+                    dot_product = dx_current * dx_prev + dy_current * dy_prev
+                    if dot_product < 0:  # Direction reversed
+                        if not reversals or (current_time - reversals[-1] > 1.5):
+                            reversals.append(current_time)
+            p_info["direction_reversals"] = reversals
+
+            if len(reversals) >= 3:
+                pts_15s = [pt for pt in history if current_time - pt[2] <= 15.0]
+                if len(pts_15s) >= 10:
+                    total_dist = 0.0
+                    for i in range(1, len(pts_15s)):
+                        total_dist += math.sqrt((pts_15s[i][0] - pts_15s[i-1][0])**2 + (pts_15s[i][1] - pts_15s[i-1][1])**2)
+                    net_disp = math.sqrt((pts_15s[-1][0] - pts_15s[0][0])**2 + (pts_15s[-1][1] - pts_15s[0][1])**2)
+                    
+                    if net_disp < pacing_max_net_disp and total_dist > pacing_min_path:
+                        p_info["active_threats"].add("REPEATED_MOVEMENT")
+                    else:
+                        p_info["active_threats"].discard("REPEATED_MOVEMENT")
 
 
-def draw_overlays(frame, tracked_bags, tracked_persons, alert_threshold,
-                  loiter_threshold, frame_count=0):
+def draw_overlays(frame, tracked_entities, frame_count=0):
     """
-    Draw all bounding boxes, risk scores, timers, and banners.
-    Returns (annotated_frame, newly_alerted_bags, newly_loitering_persons, returned_ids).
+    Draw bounding boxes, threat overlays, and Restricted Zone.
+    Returns (annotated_frame, list_of_new_alerts).
     """
-    returned_ids = check_owner_return(tracked_bags, tracked_persons)
+    h, w = frame.shape[:2]
     current_time = time.time()
-    active_bag_alerts = []
-    newly_alerted = []
-    newly_loitering = []
+    new_alerts = []
 
-    # ── Draw BAGS ──────────────────────────────────────────────────────────
-    for bag_id, info in tracked_bags.items():
+    # Run temporal behavior rules
+    analyze_behaviors(tracked_entities, w, h)
+
+    # 1. Draw Restricted Zone Polygon
+    if SentinelConfig.RESTRICTED_ZONE_ENABLED:
+        poly_pts = np.array([
+            [int(pt[0] * w), int(pt[1] * h)] for pt in SentinelConfig.RESTRICTED_ZONE_COORDS
+        ], dtype=np.int32)
+        
+        # Check if zone is currently violated by any active restricted zone threat
+        zone_violated = any("RESTRICTED_ZONE" in info["active_threats"] for info in tracked_entities.values())
+        zone_color = (0, 0, 255) if zone_violated else (255, 255, 0) # Red if violated, Cyan/Yellow if secure
+        
+        cv2.polylines(frame, [poly_pts], True, zone_color, 2)
+        cv2.putText(frame, "RESTRICTED SURVEILLANCE ZONE", (poly_pts[0][0] + 5, poly_pts[0][1] - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, zone_color, 1)
+
+    # 2. Draw Bounding Boxes and Status Badges
+    for key, info in tracked_entities.items():
         if info.get("alert_dismissed", False):
             continue
+
         x1, y1, x2, y2 = info["bbox"]
-        elapsed = current_time - info["first_seen"]
-        score, severity, color = compute_risk_score(elapsed, alert_threshold)
-        info["risk_score"] = score
+        class_name = info["class_name"]
+        track_id = info["track_id"]
+        conf = int(info["confidence"] * 100)
+        
+        risk_score, severity, color = calculate_entity_risk(info)
+        info["risk_score"] = risk_score
+        info["severity"] = severity
 
-        if elapsed >= alert_threshold:
-            active_bag_alerts.append((bag_id, elapsed, severity))
-            if not info["is_alerted"]:
-                info["is_alerted"] = True
-                newly_alerted.append((bag_id, elapsed, severity))
+        # Change color for flashing alerts
+        if risk_score >= 85: # HIGH or CRITICAL
+            if (frame_count // 8) % 2 == 0:
+                color = (0, 0, 255) # flash red
+            else:
+                color = (255, 255, 255) # flash white
 
-            if severity == "CRITICAL":
-                color = (0, 0, 255) if (frame_count // 8) % 2 == 0 else (255, 255, 255)
+        # Main Box
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2 if risk_score < 70 else 3)
 
-        # Bounding box
-        thickness = 3 if severity in ("HIGH", "CRITICAL") else 2
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
-
-        # Risk badge above box
-        badge = f"BAG #{bag_id} | {severity} {score}%"
-        (tw, th), _ = cv2.getTextSize(badge, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
-        cv2.rectangle(frame, (x1, y1 - th - 10), (x1 + tw + 6, y1), color, -1)
-        cv2.putText(frame, badge, (x1 + 3, y1 - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-
-        # Timer inside box
-        cv2.putText(frame, f"{int(elapsed)}s", (x1 + 5, y2 - 8),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
-
-        # Owner return message
-        if info.get("return_msg_frames", 0) > 0:
-            info["return_msg_frames"] -= 1
-            msg = f"OWNER RETURNED — Alert Cancelled"
-            (mw, mh), _ = cv2.getTextSize(msg, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
-            mid_x = (x1 + x2) // 2 - mw // 2
-            msg_y = max(y1 - 35, 20)
-            cv2.rectangle(frame, (mid_x - 6, msg_y - mh - 6),
-                          (mid_x + mw + 6, msg_y + 6), (0, 180, 80), -1)
-            cv2.putText(frame, msg, (mid_x, msg_y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 2)
-
-    # ── Draw PERSONS ───────────────────────────────────────────────────────
-    for pid, info in tracked_persons.items():
-        if info.get("loiter_dismissed", False):
-            continue
-        x1, y1, x2, y2 = info["bbox"]
-        dwell = info["dwell_seconds"]
-
-        if dwell >= loiter_threshold:
-            p_color = (0, 0, 255)   # red — loitering
-            if not info["is_loitering"]:
-                info["is_loitering"] = True
-                newly_loitering.append((pid, dwell))
-        elif dwell >= loiter_threshold * 0.6:
-            p_color = (0, 165, 255) # orange — approaching
-        else:
-            p_color = (180, 180, 0) # cyan-ish — normal
-
-        cv2.rectangle(frame, (x1, y1), (x2, y2), p_color, 2)
-        label = f"PERSON #{pid} {int(dwell)}s"
-        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
-        cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 4, y1), p_color, -1)
+        # Draw HUD label
+        label = f"{class_name.upper()} #{track_id} | {conf}%"
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+        cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
         cv2.putText(frame, label, (x1 + 2, y1 - 4),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 1)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
 
-    # ── Alert banner ───────────────────────────────────────────────────────
-    loiter_active = [p for p, i in tracked_persons.items() if i["is_loitering"] and not i.get("loiter_dismissed")]
-    if active_bag_alerts or loiter_active:
+        # Draw suspicious behaviors badge if active
+        threats = info.get("active_threats", set())
+        if threats:
+            threat_str = " | ".join(list(threats))
+            (ttw, tth), _ = cv2.getTextSize(threat_str, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)
+            cv2.rectangle(frame, (x1, y2), (x1 + ttw + 4, y2 + tth + 6), (0, 0, 0), -1)
+            cv2.putText(frame, threat_str, (x1 + 2, y2 + tth + 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
+
+            # Fire alerts with cooldown control
+            for t in threats:
+                last_alert = info.get("last_alert_time", 0.0)
+                if current_time - last_alert >= SentinelConfig.ALERT_COOLDOWN:
+                    info["last_alert_time"] = current_time
+                    new_alerts.append({
+                        "key": key,
+                        "track_id": track_id,
+                        "class_name": class_name,
+                        "behavior": t,
+                        "severity": severity,
+                        "score": risk_score,
+                        "description": f"{class_name.upper()} #{track_id} - {t} alert triggered"
+                    })
+
+    # 3. Draw Flashing Alarm Banner
+    active_threat_count = sum(len(info["active_threats"]) for info in tracked_entities.values() if not info.get("alert_dismissed"))
+    if active_threat_count > 0:
         overlay = frame.copy()
-        cv2.rectangle(overlay, (0, 0), (frame.shape[1], 40), (20, 0, 0), -1)
+        cv2.rectangle(overlay, (0, 0), (w, 40), (10, 0, 0), -1)
         frame = cv2.addWeighted(overlay, 0.85, frame, 0.15, 0)
-        parts = [f"BAG#{b} {sev} {int(e)}s" for b, e, sev in active_bag_alerts]
-        loiter_parts = [f"PERSON#{p} LOITERING {int(tracked_persons[p]['dwell_seconds'])}s" for p in loiter_active]
-        all_parts = parts + loiter_parts
-        banner = "⚠ ALERT -- " + " | ".join(all_parts) + " -- HUMAN INTERVENTION REQUIRED"
-        cv2.putText(frame, banner, (8, 27),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.48, (60, 60, 255), 2)
+        
+        threat_labels = []
+        for key, info in tracked_entities.items():
+            if info["active_threats"] and not info.get("alert_dismissed"):
+                threat_labels.append(f"{info['class_name'].upper()}#{info['track_id']} ({','.join(info['active_threats'])})")
+        
+        banner = "⚠ ALERT -- " + " | ".join(threat_labels)[:80] + " -- SECURITY ACTION REQUIRED"
+        cv2.putText(frame, banner, (10, 27),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (60, 60, 255), 2)
 
-    return frame, newly_alerted, newly_loitering, returned_ids
+    return frame, new_alerts
 
 
 def frame_to_tk(frame, canvas_w, canvas_h):
@@ -1217,34 +1635,25 @@ class SentinelApp:
                  highlightthickness=0, font=FONT_SMALL, length=110, sliderlength=14
                  ).pack(side="left", padx=2)
 
-        tk.Label(ctrl, text="ALERT AFTER (sec)", font=FONT_SMALL, fg=MUTED,
-                 bg=PANEL).pack(side="left", padx=(15, 2))
-        self.vid_alert_sec = tk.IntVar(value=30)
-        tk.Scale(ctrl, from_=10, to=120, orient="horizontal",
-                 variable=self.vid_alert_sec, bg=PANEL, fg=WARNING, troughcolor=CARD,
-                 highlightthickness=0, font=FONT_SMALL, length=110, sliderlength=14
-                 ).pack(side="left", padx=2)
+        # ── Main Layout (Split Frame) ──
+        main_layout = tk.Frame(self.tab_video, bg=BG)
+        main_layout.pack(fill="both", expand=True, padx=10, pady=5)
 
-        tk.Label(ctrl, text="LOITER AFTER (sec)", font=FONT_SMALL, fg=MUTED,
-                 bg=PANEL).pack(side="left", padx=(15, 2))
-        self.vid_loiter_sec = tk.IntVar(value=45)
-        tk.Scale(ctrl, from_=10, to=180, orient="horizontal",
-                 variable=self.vid_loiter_sec, bg=PANEL, fg=WARNING, troughcolor=CARD,
-                 highlightthickness=0, font=FONT_SMALL, length=110, sliderlength=14
-                 ).pack(side="left", padx=2)
+        # Left Column (Video canvas + charts + alert log)
+        left_col = tk.Frame(main_layout, bg=BG)
+        left_col.pack(side="left", fill="both", expand=True)
 
-        # ── Canvas ──
-        self.vid_canvas = tk.Canvas(self.tab_video, bg="black", highlightthickness=0)
-        self.vid_canvas.pack(padx=10, pady=5, fill="both", expand=True)
+        self.vid_canvas = tk.Canvas(left_col, bg="black", highlightthickness=0)
+        self.vid_canvas.pack(pady=5, fill="both", expand=True)
 
-        hist_frame = tk.Frame(self.tab_video, bg=CARD, height=120)
-        hist_frame.pack(padx=10, pady=(0, 3), fill="x")
+        hist_frame = tk.Frame(left_col, bg=CARD, height=105)
+        hist_frame.pack(pady=(0, 5), fill="x")
         hist_frame.pack_propagate(False)
 
         tk.Label(hist_frame, text="CONFIDENCE DISTRIBUTION", font=FONT_SMALL,
                  fg=MUTED, bg=CARD).pack(anchor="w", padx=8, pady=(4, 0))
 
-        self.vid_hist_fig = Figure(figsize=(8, 0.9), dpi=100, facecolor=CARD)
+        self.vid_hist_fig = Figure(figsize=(8, 0.75), dpi=100, facecolor=CARD)
         self.vid_hist_fig.subplots_adjust(left=0.05, right=0.98, top=0.85, bottom=0.25)
         self.vid_hist_ax = self.vid_hist_fig.add_subplot(111)
         self.vid_hist_ax.set_facecolor(BG)
@@ -1256,20 +1665,51 @@ class SentinelApp:
         self.vid_hist_canvas = FigureCanvasTkAgg(self.vid_hist_fig, master=hist_frame)
         self.vid_hist_canvas.get_tk_widget().pack(fill="both", expand=True)
         self.vid_hist_canvas.draw()
-        self.vid_conf_history = []   # rolling last 100 confidence values
+        self.vid_conf_history = []   # rolling confidence values
 
-        # ── Alert log ──
-        tk.Label(self.tab_video, text="ALERT LOG", font=FONT_SMALL, fg=MUTED,
-                 bg=BG).pack(padx=15, anchor="w")
-        self.vid_alert_log = tk.Text(self.tab_video, bg=CARD, fg=DANGER, font=FONT_SMALL,
-                                      relief="flat", height=6, padx=10, pady=5,
+        tk.Label(left_col, text="ALERT LOG", font=FONT_SMALL, fg=MUTED,
+                 bg=BG).pack(anchor="w")
+        self.vid_alert_log = tk.Text(left_col, bg=CARD, fg=DANGER, font=FONT_SMALL,
+                                      relief="flat", height=5, padx=10, pady=5,
                                       highlightthickness=0)
-        self.vid_alert_log.pack(padx=10, pady=(0, 10), fill="x")
+        self.vid_alert_log.pack(fill="x")
         self.vid_alert_log.config(state="disabled")
 
+        # Right Column (Cyber-HUD Sidebar Behavior Panel)
+        right_col = tk.Frame(main_layout, bg=PANEL, width=320)
+        right_col.pack(side="right", fill="both", expand=False, padx=(10, 0))
+        right_col.pack_propagate(False)
+
+        tk.Label(right_col, text="TACTICAL BEHAVIOR HUD", font=FONT_HEADING,
+                 fg=ACCENT, bg=PANEL).pack(pady=(15, 10))
+
+        # Active Targets Display
+        tk.Label(right_col, text="ACTIVE TARGETS", font=FONT_SMALL, fg=MUTED,
+                 bg=PANEL).pack(anchor="w", padx=15, pady=(10, 2))
+        self.vid_targets_log = tk.Text(right_col, bg=CARD, fg=TEXT, font=FONT_BODY,
+                                       relief="flat", height=10, padx=10, pady=5,
+                                       highlightthickness=0)
+        self.vid_targets_log.pack(fill="x", padx=10, pady=2)
+        self.vid_targets_log.config(state="disabled")
+
+        # Global Risk Meter
+        tk.Label(right_col, text="GLOBAL RISK SEVERITY", font=FONT_SMALL, fg=MUTED,
+                 bg=PANEL).pack(anchor="w", padx=15, pady=(10, 2))
+        self.vid_risk_lbl = tk.Label(right_col, text="NORMAL", font=("Consolas", 20, "bold"),
+                                     fg=ACCENT, bg=CARD, pady=12)
+        self.vid_risk_lbl.pack(fill="x", padx=10, pady=2)
+
+        # Recent Behavior Events
+        tk.Label(right_col, text="RECENT BEHAVIOR EVENTS", font=FONT_SMALL, fg=MUTED,
+                 bg=PANEL).pack(anchor="w", padx=15, pady=(10, 2))
+        self.vid_events_log = tk.Text(right_col, bg=CARD, fg=WARNING, font=FONT_SMALL,
+                                      relief="flat", height=6, padx=10, pady=5,
+                                      highlightthickness=0)
+        self.vid_events_log.pack(fill="both", expand=True, padx=10, pady=(2, 15))
+        self.vid_events_log.config(state="disabled")
+
         self.video_path = None
-        self.vid_tracked = {}
-        self.vid_tracked_persons = {}
+        self.vid_tracked_entities = {}
         self.vid_fcount = 0
 
     def _upload_video(self):
@@ -1288,13 +1728,11 @@ class SentinelApp:
 
         bag_model, person_model, status = load_dual_models(BASE_DIR)
         if bag_model is None and person_model is None:
-            self._canvas_msg(self.vid_canvas,
-                             f"Models failed to load: {status}")
+            self._canvas_msg(self.vid_canvas, f"Models failed to load: {status}")
             return
 
         self.video_running = True
-        self.vid_tracked = {}
-        self.vid_tracked_persons = {}
+        self.vid_tracked_entities = {}
         self.vid_fcount = 0
         self.btn_vid_play.config(state="disabled")
         self.btn_vid_stop.config(state="normal")
@@ -1314,31 +1752,42 @@ class SentinelApp:
                     break
 
                 self.vid_fcount += 1
+                
+                # Model inference
                 bag_dets = detect_bags(frame, bag_model, self.vid_conf.get())
                 person_dets = detect_persons(frame, person_model)
-                self.vid_tracked = match_bag_centroids(bag_dets, self.vid_tracked)
-                self.vid_tracked_persons = match_person_centroids(person_dets, self.vid_tracked_persons)
-                annotated, new_bag_alerts, new_loiter, returned_ids = draw_overlays(
-                    frame, self.vid_tracked, self.vid_tracked_persons,
-                    self.vid_alert_sec.get(), self.vid_loiter_sec.get(), self.vid_fcount)
+                
+                # Combine & Deduplicate overlapping boxes
+                merged_dets = bag_dets + person_dets
+                merged_dets = iou_deduplicate(merged_dets)
 
+                # Tracking match
+                self.vid_tracked_entities = match_entities(merged_dets, self.vid_tracked_entities)
+                
+                # Behavior analysis and overlay drawing
+                annotated, new_alerts = draw_overlays(frame, self.vid_tracked_entities, self.vid_fcount)
                 self._last_frame = annotated.copy()
+
+                # Update live HUD statistics on every frame
+                self.root.after(0, self._update_hud_sidebar, "vid", self.vid_tracked_entities)
 
                 self.root.after(0, self._update_conf_histogram,
                                 bag_dets, person_dets,
                                 self.vid_hist_ax, self.vid_hist_canvas,
                                 self.vid_conf_history)
 
-                for bag_id, elapsed, severity in new_bag_alerts:
-                    snapshot = annotated.copy()  # capture frame NOW in worker thread
-                    self._save_incident_snapshot(snapshot, bag_id, elapsed, severity)
-                    self.root.after(0, self._fire_bag_alert,
-                                    self.vid_alert_log, bag_id, elapsed, severity)
-                for pid, dwell in new_loiter:
-                    self.root.after(0, self._fire_loiter_alert,
-                                    self.vid_alert_log, pid, dwell)
-                for rid in returned_ids:
-                    self.root.after(0, self._on_owner_returned, rid)
+                # Process newly triggered suspicious behavior alerts
+                for alert in new_alerts:
+                    # Critical unattended bag triggers alarm & snapshot
+                    is_critical_unattended = (alert["behavior"] == "UNATTENDED_OBJECT" and alert["severity"] == "CRITICAL")
+                    is_high_threat = (alert["severity"] in ("HIGH", "CRITICAL"))
+                    
+                    if is_critical_unattended or is_high_threat:
+                        snapshot = annotated.copy()
+                        self._save_incident_snapshot(snapshot, alert["behavior"], alert["track_id"], alert["severity"])
+                        self.root.after(0, self._play_alert_sound)
+
+                    self.root.after(0, self._fire_behavior_alert, "vid", alert)
 
                 self.root.after(0, self._show_frame, annotated, self.vid_canvas)
                 time.sleep(delay)
@@ -1397,34 +1846,25 @@ class SentinelApp:
                  highlightthickness=0, font=FONT_SMALL, length=110, sliderlength=14
                  ).pack(side="left", padx=2)
 
-        tk.Label(ctrl, text="ALERT AFTER (sec)", font=FONT_SMALL, fg=MUTED,
-                 bg=PANEL).pack(side="left", padx=(15, 2))
-        self.cam_alert_sec = tk.IntVar(value=30)
-        tk.Scale(ctrl, from_=10, to=120, orient="horizontal",
-                 variable=self.cam_alert_sec, bg=PANEL, fg=WARNING, troughcolor=CARD,
-                 highlightthickness=0, font=FONT_SMALL, length=110, sliderlength=14
-                 ).pack(side="left", padx=2)
+        # ── Main Layout (Split Frame) ──
+        main_layout = tk.Frame(self.tab_camera, bg=BG)
+        main_layout.pack(fill="both", expand=True, padx=10, pady=5)
 
-        tk.Label(ctrl, text="LOITER AFTER (sec)", font=FONT_SMALL, fg=MUTED,
-                 bg=PANEL).pack(side="left", padx=(15, 2))
-        self.cam_loiter_sec = tk.IntVar(value=45)
-        tk.Scale(ctrl, from_=10, to=180, orient="horizontal",
-                 variable=self.cam_loiter_sec, bg=PANEL, fg=WARNING, troughcolor=CARD,
-                 highlightthickness=0, font=FONT_SMALL, length=110, sliderlength=14
-                 ).pack(side="left", padx=2)
+        # Left Column
+        left_col = tk.Frame(main_layout, bg=BG)
+        left_col.pack(side="left", fill="both", expand=True)
 
-        # ── Canvas ──
-        self.cam_canvas = tk.Canvas(self.tab_camera, bg="black", highlightthickness=0)
-        self.cam_canvas.pack(padx=10, pady=5, fill="both", expand=True)
+        self.cam_canvas = tk.Canvas(left_col, bg="black", highlightthickness=0)
+        self.cam_canvas.pack(pady=5, fill="both", expand=True)
 
-        hist_frame = tk.Frame(self.tab_camera, bg=CARD, height=120)
-        hist_frame.pack(padx=10, pady=(0, 3), fill="x")
+        hist_frame = tk.Frame(left_col, bg=CARD, height=105)
+        hist_frame.pack(pady=(0, 5), fill="x")
         hist_frame.pack_propagate(False)
 
         tk.Label(hist_frame, text="CONFIDENCE DISTRIBUTION", font=FONT_SMALL,
                  fg=MUTED, bg=CARD).pack(anchor="w", padx=8, pady=(4, 0))
 
-        self.cam_hist_fig = Figure(figsize=(8, 0.9), dpi=100, facecolor=CARD)
+        self.cam_hist_fig = Figure(figsize=(8, 0.75), dpi=100, facecolor=CARD)
         self.cam_hist_fig.subplots_adjust(left=0.05, right=0.98, top=0.85, bottom=0.25)
         self.cam_hist_ax = self.cam_hist_fig.add_subplot(111)
         self.cam_hist_ax.set_facecolor(BG)
@@ -1436,19 +1876,47 @@ class SentinelApp:
         self.cam_hist_canvas = FigureCanvasTkAgg(self.cam_hist_fig, master=hist_frame)
         self.cam_hist_canvas.get_tk_widget().pack(fill="both", expand=True)
         self.cam_hist_canvas.draw()
-        self.cam_conf_history = []   # rolling last 100 confidence values
+        self.cam_conf_history = []
 
-        # ── Alert log ──
-        tk.Label(self.tab_camera, text="ALERT LOG", font=FONT_SMALL, fg=MUTED,
-                 bg=BG).pack(padx=15, anchor="w")
-        self.cam_alert_log = tk.Text(self.tab_camera, bg=CARD, fg=DANGER, font=FONT_SMALL,
-                                      relief="flat", height=6, padx=10, pady=5,
+        tk.Label(left_col, text="ALERT LOG", font=FONT_SMALL, fg=MUTED,
+                 bg=BG).pack(anchor="w")
+        self.cam_alert_log = tk.Text(left_col, bg=CARD, fg=DANGER, font=FONT_SMALL,
+                                      relief="flat", height=5, padx=10, pady=5,
                                       highlightthickness=0)
-        self.cam_alert_log.pack(padx=10, pady=(0, 10), fill="x")
+        self.cam_alert_log.pack(fill="x")
         self.cam_alert_log.config(state="disabled")
 
-        self.cam_tracked = {}
-        self.cam_tracked_persons = {}
+        # Right Column (Cyber-HUD Sidebar Behavior Panel)
+        right_col = tk.Frame(main_layout, bg=PANEL, width=320)
+        right_col.pack(side="right", fill="both", expand=False, padx=(10, 0))
+        right_col.pack_propagate(False)
+
+        tk.Label(right_col, text="TACTICAL BEHAVIOR HUD", font=FONT_HEADING,
+                 fg=ACCENT, bg=PANEL).pack(pady=(15, 10))
+
+        tk.Label(right_col, text="ACTIVE TARGETS", font=FONT_SMALL, fg=MUTED,
+                 bg=PANEL).pack(anchor="w", padx=15, pady=(10, 2))
+        self.cam_targets_log = tk.Text(right_col, bg=CARD, fg=TEXT, font=FONT_BODY,
+                                       relief="flat", height=10, padx=10, pady=5,
+                                       highlightthickness=0)
+        self.cam_targets_log.pack(fill="x", padx=10, pady=2)
+        self.cam_targets_log.config(state="disabled")
+
+        tk.Label(right_col, text="GLOBAL RISK SEVERITY", font=FONT_SMALL, fg=MUTED,
+                 bg=PANEL).pack(anchor="w", padx=15, pady=(10, 2))
+        self.cam_risk_lbl = tk.Label(right_col, text="NORMAL", font=("Consolas", 20, "bold"),
+                                     fg=ACCENT, bg=CARD, pady=12)
+        self.cam_risk_lbl.pack(fill="x", padx=10, pady=2)
+
+        tk.Label(right_col, text="RECENT BEHAVIOR EVENTS", font=FONT_SMALL, fg=MUTED,
+                 bg=PANEL).pack(anchor="w", padx=15, pady=(10, 2))
+        self.cam_events_log = tk.Text(right_col, bg=CARD, fg=WARNING, font=FONT_SMALL,
+                                      relief="flat", height=6, padx=10, pady=5,
+                                      highlightthickness=0)
+        self.cam_events_log.pack(fill="both", expand=True, padx=10, pady=(2, 15))
+        self.cam_events_log.config(state="disabled")
+
+        self.cam_tracked_entities = {}
         self.cam_fcount = 0
 
     def _start_camera(self):
@@ -1459,8 +1927,7 @@ class SentinelApp:
             return
 
         self.camera_running = True
-        self.cam_tracked = {}
-        self.cam_tracked_persons = {}
+        self.cam_tracked_entities = {}
         self.cam_fcount = 0
         self.btn_cam_start.config(state="disabled")
         self.btn_cam_stop.config(state="normal")
@@ -1486,31 +1953,34 @@ class SentinelApp:
                     continue
 
                 self.cam_fcount += 1
+                
                 bag_dets = detect_bags(frame, bag_model, self.cam_conf.get())
                 person_dets = detect_persons(frame, person_model)
-                self.cam_tracked = match_bag_centroids(bag_dets, self.cam_tracked)
-                self.cam_tracked_persons = match_person_centroids(person_dets, self.cam_tracked_persons)
-                annotated, new_bag_alerts, new_loiter, returned_ids = draw_overlays(
-                    frame, self.cam_tracked, self.cam_tracked_persons,
-                    self.cam_alert_sec.get(), self.cam_loiter_sec.get(), self.cam_fcount)
+                
+                merged_dets = bag_dets + person_dets
+                merged_dets = iou_deduplicate(merged_dets)
 
+                self.cam_tracked_entities = match_entities(merged_dets, self.cam_tracked_entities)
+                annotated, new_alerts = draw_overlays(frame, self.cam_tracked_entities, self.cam_fcount)
                 self._last_frame = annotated.copy()
+
+                self.root.after(0, self._update_hud_sidebar, "cam", self.cam_tracked_entities)
 
                 self.root.after(0, self._update_conf_histogram,
                                 bag_dets, person_dets,
                                 self.cam_hist_ax, self.cam_hist_canvas,
                                 self.cam_conf_history)
 
-                for bag_id, elapsed, severity in new_bag_alerts:
-                    snapshot = annotated.copy()  # capture frame NOW in worker thread
-                    self._save_incident_snapshot(snapshot, bag_id, elapsed, severity)
-                    self.root.after(0, self._fire_bag_alert,
-                                    self.cam_alert_log, bag_id, elapsed, severity)
-                for pid, dwell in new_loiter:
-                    self.root.after(0, self._fire_loiter_alert,
-                                    self.cam_alert_log, pid, dwell)
-                for rid in returned_ids:
-                    self.root.after(0, self._on_owner_returned, rid)
+                for alert in new_alerts:
+                    is_critical_unattended = (alert["behavior"] == "UNATTENDED_OBJECT" and alert["severity"] == "CRITICAL")
+                    is_high_threat = (alert["severity"] in ("HIGH", "CRITICAL"))
+                    
+                    if is_critical_unattended or is_high_threat:
+                        snapshot = annotated.copy()
+                        self._save_incident_snapshot(snapshot, alert["behavior"], alert["track_id"], alert["severity"])
+                        self.root.after(0, self._play_alert_sound)
+
+                    self.root.after(0, self._fire_behavior_alert, "cam", alert)
 
                 self.root.after(0, self._show_frame, annotated, self.cam_canvas)
                 time.sleep(0.03)  # ~30 fps cap
@@ -1602,25 +2072,86 @@ class SentinelApp:
         except Exception as e:
             print(f"Histogram error: {e}")
 
-    def _fire_bag_alert(self, log_widget, bag_id, elapsed, severity):
-        ts = time.strftime("%H:%M:%S")
-        msg = f"[{ts}] ⚠ BAG #{bag_id} | {severity} | {int(elapsed)}s unattended — HUMAN INTERVENTION REQUIRED\n"
-        self._write_log(log_widget, msg)
-        self._play_alert_sound()
-        self._update_alert_stats("bag", bag_id, severity)
-        self.root.after(0, self._show_dismiss_popup,
-                        f"BAG #{bag_id} UNATTENDED {int(elapsed)}s\nSeverity: {severity}",
-                        "bag", bag_id)
+    def _update_hud_sidebar(self, stream_type, tracked_entities):
+        """Update the active target list and global threat severity gauge in the right Cyber-HUD sidebar panel."""
+        targets_text = ""
+        max_risk_score = 0
+        global_severity = "NORMAL"
+        severity_color = ACCENT
 
-    def _fire_loiter_alert(self, log_widget, pid, dwell):
+        # Retrieve text widget and risk label depending on tab stream type
+        targets_log = getattr(self, f"{stream_type}_targets_log", None)
+        risk_lbl = getattr(self, f"{stream_type}_risk_lbl", None)
+
+        if not targets_log or not risk_lbl:
+            return
+
+        # Build lines for each tracked entity
+        for key, info in sorted(tracked_entities.items()):
+            if info.get("alert_dismissed", False):
+                continue
+            
+            cls_name = info["class_name"]
+            track_id = info["track_id"]
+            threats = info.get("active_threats", set())
+            
+            status = "NORMAL"
+            if threats:
+                status = ", ".join(list(threats))
+
+            targets_text += f"{cls_name.upper()} #{track_id:<3} - {status}\n"
+            
+            # Keep track of global maximum risk severity
+            risk_score, severity, color = calculate_entity_risk(info)
+            if risk_score > max_risk_score:
+                max_risk_score = risk_score
+                global_severity = severity
+                severity_color = color
+
+        # Update HUD active targets panel
+        targets_log.config(state="normal")
+        targets_log.delete("1.0", "end")
+        targets_log.insert("1.0", targets_text)
+        targets_log.config(state="disabled")
+
+        # Convert severity BGR color to Hex for Tkinter
+        b, g, r = severity_color
+        hex_color = f"#{r:02x}{g:02x}{b:02x}"
+
+        # Update HUD risk gauge panel
+        risk_lbl.config(text=f"{global_severity} ({max_risk_score}%)", fg=hex_color)
+
+    def _fire_behavior_alert(self, stream_type, alert):
+        """
+        Log alerts in log widgets, update statistics counters, and pop up Acknowledge window
+        for HIGH/CRITICAL threat events.
+        """
         ts = time.strftime("%H:%M:%S")
-        msg = f"[{ts}] ⚠ PERSON #{pid} LOITERING {int(dwell)}s — HUMAN INTERVENTION REQUIRED\n"
-        self._write_log(log_widget, msg)
-        self._play_alert_sound()
-        self._update_alert_stats("loiter", pid)
-        self.root.after(0, self._show_dismiss_popup,
-                        f"PERSON #{pid} LOITERING {int(dwell)}s",
-                        "person", pid)
+        behavior = alert["behavior"]
+        severity = alert["severity"]
+        track_id = alert["track_id"]
+        class_name = alert["class_name"]
+
+        alert_msg = f"[{ts}] ⚠ {class_name.upper()} #{track_id} - SUSPICIOUS {behavior} ({severity})\n"
+
+        # Log into primary alert log (bottom text box)
+        alert_log = getattr(self, f"{stream_type}_alert_log", None)
+        if alert_log:
+            self._write_log(alert_log, alert_msg)
+
+        # Log into tactical HUD events log (sidebar)
+        events_log = getattr(self, f"{stream_type}_events_log", None)
+        if events_log:
+            self._write_log(events_log, f"[{ts}] {class_name.upper()} #{track_id} {behavior}\n")
+
+        # Update stats
+        self._update_alert_stats(behavior.lower(), f"{class_name.upper()}#{track_id}", severity)
+
+        # Trigger popup acknowledgement window for HIGH and CRITICAL alerts
+        if severity in ("HIGH", "CRITICAL"):
+            self.root.after(0, self._show_dismiss_popup,
+                            f"SUSPICIOUS {behavior} DETECTED\nTarget: {class_name.upper()} #{track_id}\nSeverity: {severity}",
+                            class_name, track_id)
 
     def _write_log(self, log_widget, msg):
         log_widget.config(state="normal")
@@ -1631,7 +2162,7 @@ class SentinelApp:
     def _play_alert_sound(self):
         """Start the shared alert sound loop if not already running."""
         if self._alert_sound_active:
-            return  # already looping — don't spawn another
+            return  # already looping
         self._alert_sound_active = True
 
         def sound_loop():
@@ -1647,7 +2178,6 @@ class SentinelApp:
                         print('\a', end='', flush=True)
                 except Exception:
                     pass
-                # Wait 3 seconds between repeats, but check flag every 0.1s
                 for _ in range(30):
                     if not self._alert_sound_active:
                         return
@@ -1677,17 +2207,18 @@ class SentinelApp:
                  font=("Consolas", 10), fg=MUTED, bg=CARD).pack(pady=5)
 
         def dismiss():
-            self._stop_alert_sound()   # ← add this line first
-            if alert_type == "bag":
-                tracked = getattr(self, "vid_tracked", {})
-                tracked.update(getattr(self, "cam_tracked", {}))
-                if target_id in tracked:
-                    tracked[target_id]["alert_dismissed"] = True
-            elif alert_type == "person":
-                tracked = getattr(self, "vid_tracked_persons", {})
-                tracked.update(getattr(self, "cam_tracked_persons", {}))
-                if target_id in tracked:
-                    tracked[target_id]["loiter_dismissed"] = True
+            self._stop_alert_sound()
+            
+            # Dismiss alert inside unified tracked entities dictionaries
+            vid_ents = getattr(self, "vid_tracked_entities", {})
+            cam_ents = getattr(self, "cam_tracked_entities", {})
+            
+            for ents in [vid_ents, cam_ents]:
+                for key, info in ents.items():
+                    if info["class_name"] == alert_type and info["track_id"] == target_id:
+                        info["alert_dismissed"] = True
+                        info["active_threats"].clear()
+                        
             popup.destroy()
 
         tk.Button(popup, text="✓ ACKNOWLEDGED — DISMISS ALERT",
@@ -1695,17 +2226,17 @@ class SentinelApp:
                   relief="flat", cursor="hand2", padx=20, pady=8,
                   command=dismiss).pack(pady=15)
 
-    def _save_incident_snapshot(self, frame, bag_id, elapsed, severity):
+    def _save_incident_snapshot(self, frame, behavior, track_id, severity):
         if frame is None:
             return
         incidents_dir = os.path.join(BASE_DIR, "incidents")
         os.makedirs(incidents_dir, exist_ok=True)
         ts = time.strftime("%Y%m%d_%H%M%S")
-        filename = f"incident_BAG{bag_id}_{severity}_{ts}.jpg"
+        filename = f"incident_{behavior}_{track_id}_{severity}_{ts}.jpg"
         filepath = os.path.join(incidents_dir, filename)
         try:
             snapshot = frame.copy()
-            label = f"BAG #{bag_id} | {severity} | {int(elapsed)}s | {time.strftime('%Y-%m-%d %H:%M:%S')}"
+            label = f"{behavior} | {severity} | ID: {track_id} | {time.strftime('%Y-%m-%d %H:%M:%S')}"
             cv2.putText(snapshot, label, (10, snapshot.shape[0] - 15),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             cv2.putText(snapshot, "SENTINEL AI — INCIDENT RECORD", (10, 25),
@@ -1720,11 +2251,14 @@ class SentinelApp:
         self.stats_vars = {
             "total_bags": tk.IntVar(value=0),
             "total_persons": tk.IntVar(value=0),
-            "total_alerts": tk.IntVar(value=0),
-            "total_loiters": tk.IntVar(value=0),
+            "total_alerts": tk.IntVar(value=0),       # Unattended Objects
+            "total_loiters": tk.IntVar(value=0),      # Loitering
+            "total_running": tk.IntVar(value=0),      # Rapid Movement
+            "total_pacing": tk.IntVar(value=0),       # Repeated Movement
+            "total_zone_entries": tk.IntVar(value=0), # Restricted Zone Violations
             "session_start": time.time(),
         }
-        self.alert_history = []  # list of (timestamp, type, id, severity)
+        self.alert_history = []  # log of alert events
 
         header = tk.Frame(self.tab_stats, bg=PANEL, height=50)
         header.pack(fill="x", padx=10, pady=(10, 5))
@@ -1743,18 +2277,29 @@ class SentinelApp:
 
         cards = tk.Frame(self.tab_stats, bg=BG)
         cards.pack(fill="x", padx=10, pady=10)
+        
         stat_items = [
             ("BAGS DETECTED", "total_bags", ACCENT),
             ("PERSONS TRACKED", "total_persons", "#44aaff"),
-            ("BAG ALERTS FIRED", "total_alerts", DANGER),
+            ("UNATTENDED BAGS", "total_alerts", DANGER),
             ("LOITERING ALERTS", "total_loiters", WARNING),
+            ("RAPID MOVEMENT", "total_running", WARNING),
+            ("REPEATED PACING", "total_pacing", WARNING),
+            ("ZONE VIOLATIONS", "total_zone_entries", DANGER),
         ]
-        for label, key, color in stat_items:
-            card = tk.Frame(cards, bg=CARD, padx=20, pady=15)
-            card.pack(side="left", expand=True, fill="both", padx=5)
-            tk.Label(card, textvariable=self.stats_vars[key], font=("Consolas", 32, "bold"),
+        
+        # Grid layout with 4 columns
+        for i, (label, key, color) in enumerate(stat_items):
+            row = i // 4
+            col = i % 4
+            card = tk.Frame(cards, bg=CARD, padx=20, pady=12)
+            card.grid(row=row, column=col, sticky="nsew", padx=5, pady=5)
+            tk.Label(card, textvariable=self.stats_vars[key], font=("Consolas", 24, "bold"),
                      fg=color, bg=CARD).pack()
             tk.Label(card, text=label, font=FONT_SMALL, fg=MUTED, bg=CARD).pack()
+            
+        for c in range(4):
+            cards.grid_columnconfigure(c, weight=1)
 
         tk.Label(self.tab_stats, text="ALERT HISTORY", font=FONT_BODY,
                  fg=MUTED, bg=BG).pack(padx=15, anchor="w", pady=(10, 2))
@@ -1764,8 +2309,14 @@ class SentinelApp:
         self.stats_log.config(state="disabled")
 
     def _refresh_stats(self):
-        bags = len(getattr(self, "vid_tracked", {})) + len(getattr(self, "cam_tracked", {}))
-        persons = len(getattr(self, "vid_tracked_persons", {})) + len(getattr(self, "cam_tracked_persons", {}))
+        vid_ents = getattr(self, "vid_tracked_entities", {})
+        cam_ents = getattr(self, "cam_tracked_entities", {})
+        
+        bags = sum(1 for e in vid_ents.values() if e["class_name"] != "person") + \
+               sum(1 for e in cam_ents.values() if e["class_name"] != "person")
+        persons = sum(1 for e in vid_ents.values() if e["class_name"] == "person") + \
+                  sum(1 for e in cam_ents.values() if e["class_name"] == "person")
+                  
         self.stats_vars["total_bags"].set(bags)
         self.stats_vars["total_persons"].set(persons)
 
@@ -1777,16 +2328,22 @@ class SentinelApp:
                     getattr(self, 'cam_alert_log', None)]:
             if log:
                 self._write_log(log, msg)
-        self._update_alert_stats("owner_return", bag_id, "CANCELLED")
 
     def _update_alert_stats(self, alert_type, alert_id, severity=""):
-        if alert_type == "bag":
+        # Increment behavior counts
+        if "unattended_object" in alert_type:
             self.stats_vars["total_alerts"].set(self.stats_vars["total_alerts"].get() + 1)
-        elif alert_type == "loiter":
+        elif "loiter" in alert_type:
             self.stats_vars["total_loiters"].set(self.stats_vars["total_loiters"].get() + 1)
-        # owner_return just logs, no counter increment
+        elif "running" in alert_type:
+            self.stats_vars["total_running"].set(self.stats_vars["total_running"].get() + 1)
+        elif "pacing" in alert_type or "movement" in alert_type:
+            self.stats_vars["total_pacing"].set(self.stats_vars["total_pacing"].get() + 1)
+        elif "restricted" in alert_type or "zone" in alert_type:
+            self.stats_vars["total_zone_entries"].set(self.stats_vars["total_zone_entries"].get() + 1)
+
         ts = time.strftime("%H:%M:%S")
-        entry = f"[{ts}] {alert_type.upper()} #{alert_id} {severity}\n"
+        entry = f"[{ts}] {alert_type.upper()} on {alert_id} | SEVERITY: {severity}\n"
         self.alert_history.append(entry)
         if hasattr(self, 'stats_log'):
             self.stats_log.config(state="normal")
@@ -1814,18 +2371,21 @@ class SentinelApp:
             styles = getSampleStyleSheet()
             story = []
 
-            story.append(Paragraph("SENTINEL AI — Session Report", styles["Title"]))
+            story.append(Paragraph("SENTINEL AI — Threat Detection Session Report", styles["Title"]))
             story.append(Paragraph(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}", styles["Normal"]))
             story.append(Spacer(1, 20))
 
             duration = int(time.time() - self.stats_vars["session_start"])
             summary_data = [
-                ["Metric", "Value"],
+                ["Metric / Behavior", "Value"],
                 ["Session Duration", f"{duration // 60}m {duration % 60}s"],
-                ["Bags Detected", str(self.stats_vars["total_bags"].get())],
+                ["Bags Tracked", str(self.stats_vars["total_bags"].get())],
                 ["Persons Tracked", str(self.stats_vars["total_persons"].get())],
-                ["Bag Alerts Fired", str(self.stats_vars["total_alerts"].get())],
-                ["Loitering Alerts", str(self.stats_vars["total_loiters"].get())],
+                ["Unattended Objects Fired", str(self.stats_vars["total_alerts"].get())],
+                ["Loitering Incidents", str(self.stats_vars["total_loiters"].get())],
+                ["Rapid Movement Detections", str(self.stats_vars["total_running"].get())],
+                ["Repeated Pacing Incidents", str(self.stats_vars["total_pacing"].get())],
+                ["Restricted Zone Crossings", str(self.stats_vars["total_zone_entries"].get())],
             ]
             t = Table(summary_data, colWidths=[250, 200])
             t.setStyle(TableStyle([
@@ -1838,7 +2398,7 @@ class SentinelApp:
             story.append(t)
             story.append(Spacer(1, 20))
 
-            story.append(Paragraph("Alert History", styles["Heading2"]))
+            story.append(Paragraph("Suspicious Behavior Alert Log", styles["Heading2"]))
             for entry in self.alert_history:
                 story.append(Paragraph(entry.strip(), styles["Normal"]))
 
