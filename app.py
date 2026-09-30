@@ -65,6 +65,20 @@ class SentinelConfig:
     ALERT_COOLDOWN = 10.0               # seconds between alerts for same entity + behavior
     TRACK_TIMEOUT = 3.0                 # seconds to keep missing tracks
     
+    # Tunable tracker parameters (Phase 2)
+    TRACK_MATCH_THRESHOLD = 100.0       # max pixel distance for centroid matching
+    MAX_MISSED_FRAMES = 30              # frames to retain missing track (~1.0s at 30fps)
+    MAX_TRACK_HISTORY = 60              # max points in trajectory history
+    BBOX_SMOOTHING_ALPHA = 0.75         # EMA factor for bounding box smoothing (0.75 curr + 0.25 prev)
+    VELOCITY_SMOOTHING_ALPHA = 0.30     # EMA factor for image-plane velocity (0.30 curr + 0.70 prev)
+    
+    # Luggage False-Positive Filter & Confirmation parameters
+    DEBUG_DETECTION = False             # Set True to log/visualize raw vs suppressed detections
+    BAG_CONFIRMATION_FRAMES = 3         # Frames a bag candidate must persist to be confirmed
+    MAX_BAG_FRAME_AREA_RATIO = 0.70     # Discard boxes covering > 70% of frame (whole-scene artifact)
+    PERSON_BAG_CONTAINMENT_THRESH = 0.85 # Max fraction of bag allowed inside person body
+    PERSON_HEAD_ZONE_RATIO = 0.30       # Top fraction of person box considered head/face
+    
     # Pacing / repeated movement thresholds (normalized to frame diagonal)
     PACING_MIN_MOVEMENT_RATIO = 0.02    # minimum movement per segment (was 0.006)
     PACING_MAX_NET_DISP_RATIO = 0.30    # maximum net displacement
@@ -170,7 +184,7 @@ def is_person(class_name):
 
 def detect_bags(frame, model, conf, device=None):
     """Run bag model inference. Returns list of (x1, y1, x2, y2, confidence, class_name)."""
-    if model is None or frame is None:
+    if model is None or frame is None or not hasattr(frame, "shape") or frame.size == 0:
         return []
     import torch
     if device is None:
@@ -190,7 +204,7 @@ def detect_bags(frame, model, conf, device=None):
 def detect_persons(frame, model, conf=0.4, device=None):
     """Run person model inference. Returns list of (x1, y1, x2, y2, confidence, class_name).
     Detects class 0 (person), 24 (backpack), 26 (handbag), 28 (suitcase) from COCO model."""
-    if model is None or frame is None:
+    if model is None or frame is None or not hasattr(frame, "shape") or frame.size == 0:
         return []
     import torch
     if device is None:
@@ -278,132 +292,336 @@ def iou_deduplicate(detections, iou_thresh=0.5, cross_class_iou_thresh=0.3):
     return kept
 
 
-def match_entities(detections, tracked_entities, threshold=100, max_missing_sec=3.0):
+class TrackStatus:
+    NEW = "NEW"
+    ACTIVE = "ACTIVE"
+    TEMPORARILY_MISSED = "TEMPORARILY_MISSED"
+    REMOVED = "REMOVED"
+
+
+class TrackState(dict):
     """
-    Unified multi-class centroid tracker with semantic group matching.
-    Detections: list of (x1, y1, x2, y2, confidence, class_name)
-    Tracked Entities: dict mapping key (e.g. 'BAG_OBJECT_1') to state dictionary
+    Structured track state representation for multi-object tracking.
+    Maintains persistent track_id, temporal age, detection counts,
+    bounded trajectory history, and smoothed image-plane velocity.
+    Supports both dictionary indexing (backward compatible) and attribute access.
     """
+    def __init__(self, track_id, class_name, bbox, confidence, centroid=None, **kwargs):
+        super().__init__()
+        self["track_id"] = int(track_id)
+        self["class_name"] = str(class_name)
+        self["bbox"] = tuple(int(v) for v in bbox)
+        self["raw_bbox"] = tuple(int(v) for v in kwargs.get("raw_bbox", bbox))
+        self["smoothed_bbox"] = tuple(int(v) for v in kwargs.get("smoothed_bbox", bbox))
+
+        if centroid is None:
+            cx = (bbox[0] + bbox[2]) / 2.0
+            cy = (bbox[1] + bbox[3]) / 2.0
+        else:
+            cx, cy = centroid
+        self["centroid"] = (float(cx), float(cy))
+        self["smoothed_centroid"] = (float(cx), float(cy))
+        self["confidence"] = float(confidence)
+
+        now = kwargs.get("current_time", time.time())
+        self["first_seen"] = float(kwargs.get("first_seen", now))
+        self["last_seen"] = float(kwargs.get("last_seen", now))
+        self["age"] = int(kwargs.get("age", 1))
+        self["missed_frames"] = int(kwargs.get("missed_frames", 0))
+        self["detection_count"] = int(kwargs.get("detection_count", 1))
+        self["active"] = bool(kwargs.get("active", True))
+        self["state"] = str(kwargs.get("state", TrackStatus.NEW))
+
+        # Trajectory history bounded to MAX_TRACK_HISTORY
+        init_history = kwargs.get("history", [(float(cx), float(cy), now)])
+        max_hist = getattr(SentinelConfig, "MAX_TRACK_HISTORY", 60)
+        self["history"] = list(init_history)[-max_hist:]
+
+        # Image-plane movement velocity (pixels per second)
+        self["velocity"] = float(kwargs.get("velocity", 0.0))
+        self["smoothed_velocity"] = float(kwargs.get("smoothed_velocity", 0.0))
+        self["speed"] = self["smoothed_velocity"]  # alias for behavioral engine
+
+        # Behavioral and threat properties
+        self["active_threats"] = set(kwargs.get("active_threats", set()))
+        self["alert_dismissed"] = bool(kwargs.get("alert_dismissed", False))
+        self["last_alert_time"] = float(kwargs.get("last_alert_time", 0.0))
+        self["risk_score"] = int(kwargs.get("risk_score", 0))
+        self["severity"] = str(kwargs.get("severity", "LOW"))
+        self["stationary_start"] = kwargs.get("stationary_start", None)
+        self["last_move_time"] = float(kwargs.get("last_move_time", now))
+        self["nearest_person_id"] = kwargs.get("nearest_person_id", None)
+        self["last_proximity_time"] = float(kwargs.get("last_proximity_time", now))
+        self["direction_reversals"] = list(kwargs.get("direction_reversals", []))
+        self["consecutive_running_frames"] = int(kwargs.get("consecutive_running_frames", 0))
+        self["consecutive_restricted_frames"] = int(kwargs.get("consecutive_restricted_frames", 0))
+
+        for k, v in kwargs.items():
+            if k not in self:
+                self[k] = v
+
+    @property
+    def track_id(self): return self["track_id"]
+    @property
+    def class_name(self): return self["class_name"]
+    @property
+    def bbox(self): return self["bbox"]
+    @property
+    def raw_bbox(self): return self["raw_bbox"]
+    @property
+    def smoothed_bbox(self): return self["smoothed_bbox"]
+    @property
+    def centroid(self): return self["centroid"]
+    @property
+    def smoothed_centroid(self): return self["smoothed_centroid"]
+    @property
+    def confidence(self): return self["confidence"]
+    @property
+    def age(self): return self["age"]
+    @property
+    def missed_frames(self): return self["missed_frames"]
+    @property
+    def detection_count(self): return self["detection_count"]
+    @property
+    def active(self): return self["active"]
+    @property
+    def state(self): return self["state"]
+    @property
+    def history(self): return self["history"]
+    @property
+    def velocity(self): return self["velocity"]
+    @property
+    def smoothed_velocity(self): return self["smoothed_velocity"]
+
+
+def match_entities(detections, tracked_entities, threshold=None, max_missing_sec=None):
+    """
+    Class-aware multi-object centroid tracker with competitive distance assignment,
+    EMA bounding box smoothing, temporal age tracking, and image-plane velocity.
+
+    detections: list of (x1, y1, x2, y2, confidence, class_name)
+    tracked_entities: dict mapping semantic key (e.g. 'BAG_OBJECT_1') to TrackState or dict
+    threshold: maximum pixel distance for spatial association (defaults to SentinelConfig.TRACK_MATCH_THRESHOLD)
+    max_missing_sec: max seconds to keep temporarily missing tracks (defaults to SentinelConfig.TRACK_TIMEOUT)
+    """
+    if threshold is None:
+        threshold = getattr(SentinelConfig, "TRACK_MATCH_THRESHOLD", 100.0)
+    if max_missing_sec is None:
+        max_missing_sec = getattr(SentinelConfig, "TRACK_TIMEOUT", 3.0)
+    max_missed_frames = getattr(SentinelConfig, "MAX_MISSED_FRAMES", 30)
+    alpha = getattr(SentinelConfig, "BBOX_SMOOTHING_ALPHA", 0.75)
+    beta = getattr(SentinelConfig, "VELOCITY_SMOOTHING_ALPHA", 0.30)
+    max_history = getattr(SentinelConfig, "MAX_TRACK_HISTORY", 60)
+
     current_time = time.time()
     new_tracked = {}
-    used_keys = set()
+    matched_keys = set()
+    matched_det_indices = set()
 
-    for (x1, y1, x2, y2, conf, class_name) in detections:
-        cx = (x1 + x2) / 2.0
-        cy = (y1 + y2) / 2.0
-        best_key, best_dist = None, threshold
-        
-        det_group = get_object_group(class_name)
+    # Organize detections by semantic group to enforce strict class-aware tracking
+    dets_by_group = {}
+    for idx, det in enumerate(detections):
+        cls_name = det[5] if len(det) > 5 else "luggage"
+        group = get_object_group(cls_name)
+        dets_by_group.setdefault(group, []).append((idx, det))
 
-        # Greedy match among existing targets of the SAME SEMANTIC GROUP
-        for key, info in tracked_entities.items():
-            if get_object_group(info["class_name"]) != det_group:
+    # Organize existing tracks by semantic group
+    tracks_by_group = {}
+    for key, info in tracked_entities.items():
+        cls_name = info.get("class_name", "luggage")
+        group = get_object_group(cls_name)
+        tracks_by_group.setdefault(group, []).append((key, info))
+
+    all_groups = set(dets_by_group.keys()) | set(tracks_by_group.keys())
+
+    for group in all_groups:
+        group_dets = dets_by_group.get(group, [])
+        group_tracks = tracks_by_group.get(group, [])
+
+        # Build candidate pairs with Euclidean distance
+        candidate_pairs = []
+        for det_idx, det in group_dets:
+            x1, y1, x2, y2, conf, cls_name = det[:6]
+            dcx = (x1 + x2) / 2.0
+            dcy = (y1 + y2) / 2.0
+            for t_key, t_info in group_tracks:
+                tbx = t_info["bbox"]
+                tcx = (tbx[0] + tbx[2]) / 2.0
+                tcy = (tbx[1] + tbx[3]) / 2.0
+                dist = math.hypot(dcx - tcx, dcy - tcy)
+                if dist <= threshold:
+                    candidate_pairs.append((dist, det_idx, det, t_key, t_info))
+
+        # Sort candidate pairs by distance (competitive closest-first assignment)
+        candidate_pairs.sort(key=lambda p: p[0])
+
+        group_matched_dets = set()
+        group_matched_tracks = set()
+
+        for dist, det_idx, det, t_key, t_info in candidate_pairs:
+            if det_idx in group_matched_dets or t_key in group_matched_tracks:
                 continue
-            if key in used_keys:
-                continue
-            bx1, by1, bx2, by2 = info["bbox"]
-            bcx = (bx1 + bx2) / 2.0
-            bcy = (by1 + by2) / 2.0
-            dist = math.sqrt((cx - bcx)**2 + (cy - bcy)**2)
-            if dist < best_dist:
-                best_dist = dist
-                best_key = key
 
-        if best_key is not None:
-            used_keys.add(best_key)
-            old_info = tracked_entities[best_key]
-            
-            # EMA Smoothing (75% current + 25% previous)
-            old_x1, old_y1, old_x2, old_y2 = old_info["bbox"]
-            smooth_x1 = int(0.75 * x1 + 0.25 * old_x1)
-            smooth_y1 = int(0.75 * y1 + 0.25 * old_y1)
-            smooth_x2 = int(0.75 * x2 + 0.25 * old_x2)
-            smooth_y2 = int(0.75 * y2 + 0.25 * old_y2)
+            group_matched_dets.add(det_idx)
+            group_matched_tracks.add(t_key)
+            matched_det_indices.add(det_idx)
+            matched_keys.add(t_key)
 
-            history = old_info.get("history", []).copy()
-            history.append((cx, cy, current_time))
-            if len(history) > 300:
+            x1, y1, x2, y2, conf, cls_name = det[:6]
+            dcx = (x1 + x2) / 2.0
+            dcy = (y1 + y2) / 2.0
+
+            # Bounding box EMA smoothing
+            old_bbox = t_info["bbox"]
+            smooth_x1 = int(alpha * x1 + (1.0 - alpha) * old_bbox[0])
+            smooth_y1 = int(alpha * y1 + (1.0 - alpha) * old_bbox[1])
+            smooth_x2 = int(alpha * x2 + (1.0 - alpha) * old_bbox[2])
+            smooth_y2 = int(alpha * y2 + (1.0 - alpha) * old_bbox[3])
+            smooth_bbox = (smooth_x1, smooth_y1, smooth_x2, smooth_y2)
+            smooth_cx = (smooth_x1 + smooth_x2) / 2.0
+            smooth_cy = (smooth_y1 + smooth_y2) / 2.0
+
+            # Trajectory history
+            history = list(t_info.get("history", []))
+            history.append((dcx, dcy, current_time))
+            if len(history) > max_history:
                 history.pop(0)
 
-            # Instantaneous and smoothed speed
-            speed = old_info.get("speed", 0.0)
+            # Image-plane velocity (pixels / second)
+            prev_smoothed_vel = t_info.get("smoothed_velocity", t_info.get("speed", 0.0))
+            inst_vel = 0.0
             if len(history) >= 2:
-                dx = cx - history[-2][0]
-                dy = cy - history[-2][1]
-                dt = current_time - history[-2][2]
-                if dt > 0:
-                    inst_speed = math.sqrt(dx**2 + dy**2) / dt
-                    speed = 0.7 * speed + 0.3 * inst_speed
+                prev_x, prev_y, prev_t = history[-2]
+                dt = current_time - prev_t
+                if dt > 0.001:
+                    inst_vel = math.hypot(dcx - prev_x, dcy - prev_y) / dt
+            smoothed_vel = beta * inst_vel + (1.0 - beta) * prev_smoothed_vel
 
-            # Preserve the old key (stable identity) but update class_name to latest observation
-            new_tracked[best_key] = {
-                "track_id": old_info["track_id"],
-                "class_name": class_name,  # Update to latest observed class
-                "confidence": conf,
-                "bbox": (smooth_x1, smooth_y1, smooth_x2, smooth_y2),
-                "centroid": (cx, cy),
-                "history": history,
-                "first_seen": old_info["first_seen"],
-                "last_seen": current_time,
-                "speed": speed,
-                "active_threats": old_info.get("active_threats", set()),
-                "alert_dismissed": old_info.get("alert_dismissed", False),
-                "last_alert_time": old_info.get("last_alert_time", 0.0),
-                "risk_score": old_info.get("risk_score", 0),
-                "severity": old_info.get("severity", "LOW"),
-                "stationary_start": old_info.get("stationary_start", None),
-                "last_move_time": old_info.get("last_move_time", current_time),
-                "nearest_person_id": old_info.get("nearest_person_id", None),
-                "last_proximity_time": old_info.get("last_proximity_time", current_time),
-                "direction_reversals": old_info.get("direction_reversals", []),
-                "consecutive_running_frames": old_info.get("consecutive_running_frames", 0),
-                "consecutive_restricted_frames": old_info.get("consecutive_restricted_frames", 0),
-            }
-        else:
-            # Generate new track ID within the semantic group
+            updated_track = TrackState(
+                track_id=t_info["track_id"],
+                class_name=cls_name,
+                bbox=smooth_bbox,
+                confidence=conf,
+                centroid=(dcx, dcy),
+                raw_bbox=(x1, y1, x2, y2),
+                smoothed_bbox=smooth_bbox,
+                smoothed_centroid=(smooth_cx, smooth_cy),
+                first_seen=t_info["first_seen"],
+                last_seen=current_time,
+                age=t_info.get("age", 1) + 1,
+                missed_frames=0,
+                detection_count=t_info.get("detection_count", 1) + 1,
+                active=True,
+                state=TrackStatus.ACTIVE,
+                history=history,
+                velocity=inst_vel,
+                smoothed_velocity=smoothed_vel,
+                # Preserve behavior fields
+                active_threats=t_info.get("active_threats", set()),
+                alert_dismissed=t_info.get("alert_dismissed", False),
+                last_alert_time=t_info.get("last_alert_time", 0.0),
+                risk_score=t_info.get("risk_score", 0),
+                severity=t_info.get("severity", "LOW"),
+                stationary_start=t_info.get("stationary_start", None),
+                last_move_time=t_info.get("last_move_time", current_time),
+                nearest_person_id=t_info.get("nearest_person_id", None),
+                last_proximity_time=t_info.get("last_proximity_time", current_time),
+                direction_reversals=t_info.get("direction_reversals", []),
+                consecutive_running_frames=t_info.get("consecutive_running_frames", 0),
+                consecutive_restricted_frames=t_info.get("consecutive_restricted_frames", 0),
+            )
+            new_tracked[t_key] = updated_track
+
+        # Spawn new tracks for unmatched detections in this group
+        for det_idx, det in group_dets:
+            if det_idx in matched_det_indices:
+                continue
+
+            x1, y1, x2, y2, conf, cls_name = det[:6]
+            dcx = (x1 + x2) / 2.0
+            dcy = (y1 + y2) / 2.0
+
             existing_ids = [
-                info["track_id"] 
-                for info in tracked_entities.values() 
-                if get_object_group(info["class_name"]) == det_group
+                info["track_id"]
+                for info in tracked_entities.values()
+                if get_object_group(info["class_name"]) == group
             ]
             new_ids = [
-                info["track_id"] 
-                for info in new_tracked.values() 
-                if get_object_group(info["class_name"]) == det_group
+                info["track_id"]
+                for info in new_tracked.values()
+                if get_object_group(info["class_name"]) == group
             ]
             all_ids = existing_ids + new_ids
             new_id = (max(all_ids) + 1) if all_ids else 1
+            key = f"{group}_{new_id}"
 
-            # Use semantic group in key for stable identity across class changes
-            key = f"{det_group}_{new_id}"
-            new_tracked[key] = {
-                "track_id": new_id,
-                "class_name": class_name,
-                "confidence": conf,
-                "bbox": (x1, y1, x2, y2),
-                "centroid": (cx, cy),
-                "history": [(cx, cy, current_time)],
-                "first_seen": current_time,
-                "last_seen": current_time,
-                "speed": 0.0,
-                "active_threats": set(),
-                "alert_dismissed": False,
-                "last_alert_time": 0.0,
-                "risk_score": 0,
-                "severity": "LOW",
-                "stationary_start": None,
-                "last_move_time": current_time,
-                "nearest_person_id": None,
-                "last_proximity_time": current_time,
-                "direction_reversals": [],
-                "consecutive_running_frames": 0,
-                "consecutive_restricted_frames": 0,
-            }
+            new_track = TrackState(
+                track_id=new_id,
+                class_name=cls_name,
+                bbox=(x1, y1, x2, y2),
+                confidence=conf,
+                centroid=(dcx, dcy),
+                raw_bbox=(x1, y1, x2, y2),
+                smoothed_bbox=(x1, y1, x2, y2),
+                smoothed_centroid=(dcx, dcy),
+                first_seen=current_time,
+                last_seen=current_time,
+                age=1,
+                missed_frames=0,
+                detection_count=1,
+                active=True,
+                state=TrackStatus.NEW,
+                history=[(dcx, dcy, current_time)],
+                velocity=0.0,
+                smoothed_velocity=0.0,
+            )
+            new_tracked[key] = new_track
+            matched_det_indices.add(det_idx)
 
-    # Keep missing tracks briefly before deletion timeout
+    # Handle unmatched tracks (temporarily missing detections)
     for key, info in tracked_entities.items():
-        if key not in used_keys and (current_time - info["last_seen"] < max_missing_sec):
-            new_tracked[key] = info
+        if key in matched_keys:
+            continue
+
+        new_missed = info.get("missed_frames", 0) + 1
+        elapsed_missing = current_time - info["last_seen"]
+
+        # Keep track if within both frame count and temporal limits
+        if new_missed <= max_missed_frames and elapsed_missing < max_missing_sec:
+            decayed_vel = info.get("smoothed_velocity", 0.0) * 0.8
+            kept_track = TrackState(
+                track_id=info["track_id"],
+                class_name=info["class_name"],
+                bbox=info["bbox"],
+                confidence=info["confidence"],
+                centroid=info["centroid"],
+                raw_bbox=info.get("raw_bbox", info["bbox"]),
+                smoothed_bbox=info.get("smoothed_bbox", info["bbox"]),
+                smoothed_centroid=info.get("smoothed_centroid", info["centroid"]),
+                first_seen=info["first_seen"],
+                last_seen=info["last_seen"],
+                age=info.get("age", 1) + 1,
+                missed_frames=new_missed,
+                detection_count=info.get("detection_count", 1),
+                active=False,
+                state=TrackStatus.TEMPORARILY_MISSED,
+                history=info.get("history", []),
+                velocity=0.0,
+                smoothed_velocity=decayed_vel,
+                active_threats=info.get("active_threats", set()),
+                alert_dismissed=info.get("alert_dismissed", False),
+                last_alert_time=info.get("last_alert_time", 0.0),
+                risk_score=info.get("risk_score", 0),
+                severity=info.get("severity", "LOW"),
+                stationary_start=info.get("stationary_start", None),
+                last_move_time=info.get("last_move_time", current_time),
+                nearest_person_id=info.get("nearest_person_id", None),
+                last_proximity_time=info.get("last_proximity_time", current_time),
+                direction_reversals=info.get("direction_reversals", []),
+                consecutive_running_frames=info.get("consecutive_running_frames", 0),
+                consecutive_restricted_frames=info.get("consecutive_restricted_frames", 0),
+            )
+            new_tracked[key] = kept_track
 
     return new_tracked
 
@@ -762,6 +980,9 @@ def draw_overlays(frame, tracked_entities, frame_count=0):
     for key, info in tracked_entities.items():
         if info.get("alert_dismissed", False):
             continue
+        # Avoid rendering ghost boxes if target has been missed for several frames
+        if info.get("missed_frames", 0) > 5:
+            continue
 
         x1, y1, x2, y2 = info["bbox"]
         class_name = info["class_name"]
@@ -834,8 +1055,10 @@ def draw_overlays(frame, tracked_entities, frame_count=0):
 
 def frame_to_tk(frame, canvas_w, canvas_h):
     """Convert cv2 BGR frame to ImageTk.PhotoImage sized to fit canvas."""
+    if frame is None or not hasattr(frame, "shape") or frame.size == 0:
+        return None
     h, w = frame.shape[:2]
-    if w == 0 or h == 0:
+    if w <= 0 or h <= 0:
         return None
     scale = min(canvas_w / w, canvas_h / h)
     new_w = max(int(w * scale), 1)
@@ -1741,14 +1964,25 @@ class SentinelApp:
         threading.Thread(target=self._video_worker, args=(bag_model, person_model), daemon=True).start()
 
     def _video_worker(self, bag_model, person_model):
+        cap = None
         try:
+            if not self.video_path or not os.path.isfile(self.video_path):
+                self.root.after(0, self._canvas_msg, self.vid_canvas, "Video file not found or invalid.")
+                self.root.after(0, self._set_status, "FILE NOT FOUND", DANGER)
+                return
+
             cap = cv2.VideoCapture(self.video_path)
+            if not cap or not cap.isOpened():
+                self.root.after(0, self._canvas_msg, self.vid_canvas, f"Cannot open video:\n{os.path.basename(self.video_path)}")
+                self.root.after(0, self._set_status, "CANNOT OPEN VIDEO", DANGER)
+                return
+
             fps = cap.get(cv2.CAP_PROP_FPS) or 30
-            delay = 1.0 / fps
+            delay = 1.0 / max(fps, 1)
 
             while self.video_running and cap.isOpened():
                 ret, frame = cap.read()
-                if not ret:
+                if not ret or frame is None or frame.size == 0:
                     break
 
                 self.vid_fcount += 1
@@ -1792,11 +2026,15 @@ class SentinelApp:
                 self.root.after(0, self._show_frame, annotated, self.vid_canvas)
                 time.sleep(delay)
 
-            cap.release()
         except Exception as e:
             print(f"Video error: {e}")
             self.root.after(0, self._set_status, f"ERROR: {e}", DANGER)
         finally:
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
             self.root.after(0, self._video_stopped)
 
     def _stop_video(self):
@@ -1926,32 +2164,56 @@ class SentinelApp:
                 self.cam_canvas, f"Models failed to load: {status}"))
             return
 
+        cam_idx_str = self.cam_idx_var.get()
+        try:
+            cam_idx = int(cam_idx_str)
+        except (ValueError, TypeError):
+            cam_idx = 0
+
         self.camera_running = True
         self.cam_tracked_entities = {}
         self.cam_fcount = 0
         self.btn_cam_start.config(state="disabled")
         self.btn_cam_stop.config(state="normal")
-        self._set_status("DETECTING", WARNING)
+        self._set_status("CONNECTING TO CAMERA...", WARNING)
 
-        cam_idx = int(self.cam_idx_var.get())
         threading.Thread(target=self._camera_worker,
                          args=(bag_model, person_model, cam_idx), daemon=True).start()
 
     def _camera_worker(self, bag_model, person_model, cam_idx):
+        cap = None
         try:
             cap = cv2.VideoCapture(cam_idx)
-            if not cap.isOpened():
+            if not cap or not cap.isOpened():
                 self.root.after(0, self._canvas_msg, self.cam_canvas,
-                                f"\u26A0 No camera detected at index {cam_idx}")
-                self.root.after(0, self._camera_stopped)
+                                f"\u26A0 No camera detected at index {cam_idx}\nPlease check webcam connection or select another index.")
+                self.root.after(0, self._set_status, f"CAMERA NOT FOUND (idx {cam_idx})", DANGER)
                 return
 
+            # Test-read first frame
+            ret, test_frame = cap.read()
+            if not ret or test_frame is None:
+                self.root.after(0, self._canvas_msg, self.cam_canvas,
+                                f"\u26A0 Failed to read feed from camera index {cam_idx}")
+                self.root.after(0, self._set_status, f"CAMERA READ FAILED (idx {cam_idx})", DANGER)
+                return
+
+            self.root.after(0, self._set_status, "CAMERA ACTIVE", ACCENT)
+
+            failed_reads = 0
             while self.camera_running and cap.isOpened():
                 ret, frame = cap.read()
-                if not ret:
-                    time.sleep(0.01)
+                if not ret or frame is None or frame.size == 0:
+                    failed_reads += 1
+                    if failed_reads > 30:
+                        self.root.after(0, self._canvas_msg, self.cam_canvas,
+                                        f"\u26A0 Camera feed lost or disconnected (index {cam_idx})")
+                        self.root.after(0, self._set_status, "CAMERA DISCONNECTED", DANGER)
+                        break
+                    time.sleep(0.03)
                     continue
 
+                failed_reads = 0
                 self.cam_fcount += 1
                 
                 bag_dets = detect_bags(frame, bag_model, self.cam_conf.get())
@@ -1985,11 +2247,15 @@ class SentinelApp:
                 self.root.after(0, self._show_frame, annotated, self.cam_canvas)
                 time.sleep(0.03)  # ~30 fps cap
 
-            cap.release()
         except Exception as e:
             print(f"Camera error: {e}")
             self.root.after(0, self._set_status, f"ERROR: {e}", DANGER)
         finally:
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
             self.root.after(0, self._camera_stopped)
 
     def _stop_camera(self):
@@ -2008,28 +2274,34 @@ class SentinelApp:
 
     def _show_frame(self, frame, canvas):
         """Render a cv2 frame onto a Tk canvas, centred and aspect-ratio correct."""
-        canvas.update_idletasks()
-        cw = canvas.winfo_width()
-        ch = canvas.winfo_height()
-        if cw < 10 or ch < 10:
-            return
+        try:
+            canvas.update_idletasks()
+            cw = canvas.winfo_width()
+            ch = canvas.winfo_height()
+            if cw < 10 or ch < 10:
+                return
 
-        photo = frame_to_tk(frame, cw, ch)
-        if photo is None:
-            return
-        canvas.delete("all")
-        canvas.create_image(cw // 2, ch // 2, image=photo, anchor="center")
-        canvas._photo = photo  # prevent GC
+            photo = frame_to_tk(frame, cw, ch)
+            if photo is None:
+                return
+            canvas.delete("all")
+            canvas.create_image(cw // 2, ch // 2, image=photo, anchor="center")
+            canvas._photo = photo  # prevent GC
+        except (tk.TclError, Exception):
+            pass
 
     def _canvas_msg(self, canvas, text):
         """Show a centred text message on a canvas."""
-        canvas.update_idletasks()
-        cw = canvas.winfo_width()
-        ch = canvas.winfo_height()
-        canvas.delete("all")
-        canvas.create_text(max(cw // 2, 100), max(ch // 2, 50),
-                           text=text, fill=DANGER, font=FONT_HEADING,
-                           width=cw - 40)
+        try:
+            canvas.update_idletasks()
+            cw = canvas.winfo_width()
+            ch = canvas.winfo_height()
+            canvas.delete("all")
+            canvas.create_text(max(cw // 2, 100), max(ch // 2, 50),
+                               text=text, fill=DANGER, font=FONT_HEADING,
+                               width=max(cw - 40, 200))
+        except (tk.TclError, Exception):
+            pass
 
     def _update_conf_histogram(self, bag_dets, person_dets, hist_ax, hist_canvas, conf_history):
         """Update the confidence histogram with latest detections."""
@@ -2114,9 +2386,14 @@ class SentinelApp:
         targets_log.insert("1.0", targets_text)
         targets_log.config(state="disabled")
 
-        # Convert severity BGR color to Hex for Tkinter
-        b, g, r = severity_color
-        hex_color = f"#{r:02x}{g:02x}{b:02x}"
+        # Convert severity color to Hex for Tkinter safely
+        if isinstance(severity_color, str) and severity_color.startswith("#"):
+            hex_color = severity_color
+        elif isinstance(severity_color, (tuple, list)) and len(severity_color) == 3:
+            b, g, r = severity_color
+            hex_color = f"#{int(r):02x}{int(g):02x}{int(b):02x}"
+        else:
+            hex_color = ACCENT
 
         # Update HUD risk gauge panel
         risk_lbl.config(text=f"{global_severity} ({max_risk_score}%)", fg=hex_color)
@@ -2227,7 +2504,7 @@ class SentinelApp:
                   command=dismiss).pack(pady=15)
 
     def _save_incident_snapshot(self, frame, behavior, track_id, severity):
-        if frame is None:
+        if frame is None or not hasattr(frame, "shape") or frame.size == 0:
             return
         incidents_dir = os.path.join(BASE_DIR, "incidents")
         os.makedirs(incidents_dir, exist_ok=True)
