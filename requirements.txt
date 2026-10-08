@@ -4,6 +4,7 @@ PyYAML
 Pillow
 matplotlib
 numpy
+scikit-learn
 reportlab
 openpyxl
 

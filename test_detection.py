@@ -14,6 +14,7 @@ sys.path.insert(0, BASE_DIR)
 # Import detection functions from app.py (current API)
 from app import (
     load_dual_models, detect_bags, detect_persons,
+    filter_bag_person_false_positives,
     iou_deduplicate, match_entities, analyze_behaviors,
     calculate_entity_risk, draw_overlays, SentinelConfig
 )
@@ -91,6 +92,9 @@ while cap.isOpened() and fcount < MAX_FRAMES:
 
     fcount += 1
     
+    # Calculate video time for behavior analysis (video-time, not wall-clock)
+    video_time = fcount / fps
+    
     # Model inference
     bag_dets = detect_bags(frame, bag_model, CONF_THRESHOLD)
     person_dets = detect_persons(frame, person_model)
@@ -104,15 +108,16 @@ while cap.isOpened() and fcount < MAX_FRAMES:
     for d in person_dets:
         conf_values.append(("person", d[4]))
 
-    # Combine & Deduplicate overlapping boxes
-    merged_dets = bag_dets + person_dets
+    # Filter false positives and combine
+    clean_bags = filter_bag_person_false_positives(bag_dets, person_dets)
+    merged_dets = clean_bags + person_dets
     merged_dets = iou_deduplicate(merged_dets)
 
-    # Unified tracking match
-    tracked_entities = match_entities(merged_dets, tracked_entities)
+    # Unified tracking match with video-time
+    tracked_entities = match_entities(merged_dets, tracked_entities, current_time=video_time)
 
-    # Behavior analysis (analyze_behaviors is called inside draw_overlays)
-    annotated, new_alerts = draw_overlays(frame, tracked_entities, fcount)
+    # Behavior analysis with video-time (analyze_behaviors is called inside draw_overlays)
+    annotated, new_alerts = draw_overlays(frame, tracked_entities, fcount, current_time=video_time)
 
     # Log new alerts
     for alert in new_alerts:
