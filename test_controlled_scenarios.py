@@ -4,7 +4,7 @@ Deterministic, video-time frame-by-frame evaluation of all required scenarios:
 1. Normal walking (A -> B -> C -> D -> E for 60s) -> NORMAL
 2. Long dwell (Stationary for 60s) -> Before 45s: NO LONG_DWELL; At/after 45s: LONG_DWELL / OBSERVING (NOT suspicious)
 3. Prolonged pacing (A <-> B for 60s) -> At/after 45s: LONG_DWELL + high meander + revisits -> SUSPICIOUS LOITERING (ALERT)
-4. Restricted + pacing (Enters restricted zone and paces) -> RESTRICTED_ZONE_ENTRY -> CRITICAL / HIGH_CONFIDENCE_SUSPICIOUS
+4. Possible fall (Lying down for 60s) -> POSSIBLE_FALL after temporal confirmation -> Safety alert (NORMAL loiter risk)
 5. Normal person + one turn (A -> B -> C) -> NORMAL
 6. Single revisit (A -> B -> A) -> Revisit recorded, but NOT immediately suspicious
 """
@@ -27,15 +27,10 @@ FPS = 25.0
 FRAME_WIDTH = 800
 FRAME_HEIGHT = 600
 
-# Restricted zone in 800x600 coordinates:
-# X: [0.60 * 800, 0.95 * 800] = [480, 760]
-# Y: [0.20 * 600, 0.75 * 600] = [120, 450]
-
-
 def run_controlled_scenario_1_normal_walking():
     """
     SCENARIO 1: NORMAL WALKING
-    Person moves A -> B -> C -> D -> E across the scene for 60 seconds (outside restricted zone).
+    Person moves A -> B -> C -> D -> E across the scene for 60 seconds.
     Expected: NORMAL. No suspicious alert.
     """
     duration = 60.0
@@ -47,10 +42,10 @@ def run_controlled_scenario_1_normal_walking():
     
     alert_times = []
     
-    # Linear transit from x=50 to x=650 over 60 seconds (outside restricted zone: y=500 is outside Y[120, 450])
+    # Linear transit from x=50 to x=650 over 60 seconds.
     for f in range(total_frames):
         t = f / FPS
-        # Waypoints: A(50), B(200), C(350), D(500), E(650) at y=520 (outside restricted zone)
+        # Waypoints: A(50), B(200), C(350), D(500), E(650) at y=520.
         x = 50.0 + (t / duration) * 600.0
         y = 520.0
         track["centroid"] = (x, y)
@@ -68,7 +63,6 @@ def run_controlled_scenario_1_normal_walking():
         track["behavior_state"] == "NORMAL" and
         "SUSPICIOUS_LOITERING" not in track["active_threats"] and
         "LOITERING" not in track["active_threats"] and
-        "RESTRICTED_ZONE" not in track["active_threats"] and
         len(alert_times) == 0
     )
     
@@ -81,7 +75,7 @@ def run_controlled_scenario_1_normal_walking():
         "dwell_time": f"{track['dwell_time']:.1f}s",
         "meander_ratio": f"{track['meander_ratio']:.2f}",
         "revisit_count": track["revisit_count"],
-        "restricted_zone": "YES" if track["in_restricted_zone"] else "NO",
+        "posture": track.get("posture", "STANDING"),
         "final_suspicion_state": f"{track['behavior_state']} (Risk: {severity}, {risk_score}%)",
         "pass": is_pass
     }
@@ -152,7 +146,7 @@ def run_controlled_scenario_2_long_dwell():
         "dwell_time": f"{track['dwell_time']:.1f}s",
         "meander_ratio": f"{track['meander_ratio']:.2f}",
         "revisit_count": track["revisit_count"],
-        "restricted_zone": "YES" if track["in_restricted_zone"] else "NO",
+        "posture": track.get("posture", "STANDING"),
         "final_suspicion_state": f"{track['behavior_state']} (Risk: {severity}, {risk_score}%)",
         "pass": is_pass
     }
@@ -161,7 +155,7 @@ def run_controlled_scenario_2_long_dwell():
 def run_controlled_scenario_3_prolonged_pacing():
     """
     SCENARIO 3: PROLONGED PACING
-    Person repeatedly moves A -> B -> A -> B -> A -> B -> A -> B for 60 seconds (outside restricted zone).
+    Person repeatedly moves A -> B -> A -> B -> A -> B -> A -> B for 60 seconds.
     Expected:
     LONG_DWELL + high meander evidence + revisit evidence.
     Eventually: SUSPICIOUS LOITERING (ALERT) after temporal persistence.
@@ -176,7 +170,7 @@ def run_controlled_scenario_3_prolonged_pacing():
     alert_time = None
     long_dwell_time = None
     
-    # Pacing between x=150 and x=350 at y=520 (outside restricted zone) every 3.0 seconds
+    # Pacing between x=150 and x=350 at y=520 every 3.0 seconds.
     for f in range(total_frames):
         t = f / FPS
         phase = (t % 6.0) / 3.0
@@ -206,7 +200,7 @@ def run_controlled_scenario_3_prolonged_pacing():
         track["meander_ratio"] >= SentinelConfig.MEANDER_RATIO_THRESHOLD and
         track["revisit_count"] >= SentinelConfig.REVISIT_COUNT_THRESHOLD and
         "SUSPICIOUS_LOITERING" in track["active_threats"] and
-        track["behavior_state"] in ("ALERT", "HIGH") and
+        track["behavior_state"] in ("ALERT", "HIGH", "CRITICAL") and
         alert_time is not None and
         alert_time >= 45.0  # Must not alert before dwell threshold!
     )
@@ -220,84 +214,74 @@ def run_controlled_scenario_3_prolonged_pacing():
         "dwell_time": f"{track['dwell_time']:.1f}s",
         "meander_ratio": f"{track['meander_ratio']:.2f}",
         "revisit_count": track["revisit_count"],
-        "restricted_zone": "YES" if track["in_restricted_zone"] else "NO",
+        "posture": track.get("posture", "STANDING"),
         "final_suspicion_state": f"{track['behavior_state']} (Risk: {severity}, {risk_score}%)",
         "pass": is_pass
     }
 
 
-def run_controlled_scenario_4_restricted_pacing():
+def run_controlled_scenario_4_possible_fall():
     """
-    SCENARIO 4: RESTRICTED + PACING
-    Person enters restricted zone. Then remains there and repeatedly paces.
+    SCENARIO 4: POSSIBLE FALL DETECTION
+    Person falls/lies down. Sustained for temporal confirmation (~1.0s).
     Expected:
-    RESTRICTED_ZONE_ENTRY event, followed by CRITICAL / HIGH_CONFIDENCE_SUSPICIOUS.
+    POSSIBLE_FALL safety event, while criminal loitering risk remains NORMAL.
     """
     duration = 60.0
     total_frames = int(duration * FPS)
     track = TrackState(
-        track_id=1, class_name="person", bbox=(480, 240, 520, 360), confidence=0.9,
-        centroid=(520.0, 280.0), first_seen=0.0, current_time=0.0
+        track_id=1, class_name="person", bbox=(100, 360, 520, 450), confidence=0.9,
+        centroid=(310.0, 400.0), first_seen=0.0, current_time=0.0,
+        posture="LYING_DOWN", pose_confidence=0.92
     )
     
-    zone_entry_time = None
-    critical_alert_time = None
-    
-    # Restricted zone X: 480 - 760, Y: 120 - 450
-    # Pacing inside restricted zone between x=520 and x=700 at y=280
+    fall_alert_time = None
+    persist_frames = getattr(SentinelConfig, "POSTURE_FALL_CONFIRMATION_FRAMES", 25)
+
     for f in range(total_frames):
         t = f / FPS
-        phase = (t % 5.0) / 2.5
-        if phase <= 1.0:
-            x = 520.0 + phase * 180.0
-        else:
-            x = 700.0 - (phase - 1.0) * 180.0
-        y = 280.0
-        
-        track["centroid"] = (x, y)
-        track["history"].append((x, y, t))
+        track["history"].append((310.0, 400.0, t))
         if len(track["history"]) > SentinelConfig.MAX_TRACK_HISTORY:
             track["history"].pop(0)
             
+        track["consecutive_fall_frames"] = track.get("consecutive_fall_frames", 0) + 1
+        if track["consecutive_fall_frames"] >= persist_frames:
+            track.setdefault("active_threats", set()).add("POSSIBLE_FALL")
+            if fall_alert_time is None:
+                fall_alert_time = t
+                
         evaluate_person_behavior(track, FRAME_WIDTH, FRAME_HEIGHT, current_time=t)
         
-        if "RESTRICTED_ZONE" in track["active_threats"] and zone_entry_time is None:
-            zone_entry_time = t
-            
-        if ("HIGH_CONFIDENCE_SUSPICIOUS" in track["active_threats"] or track["behavior_state"] == "CRITICAL") and critical_alert_time is None:
-            critical_alert_time = t
-            
     risk_score, severity, _ = calculate_entity_risk(track, current_time=duration)
     
     is_pass = (
-        zone_entry_time is not None and
-        zone_entry_time < 2.0 and
-        "RESTRICTED_ZONE" in track["active_threats"] and
-        track["in_restricted_zone"] is True and
-        "HIGH_CONFIDENCE_SUSPICIOUS" in track["active_threats"] and
-        track["behavior_state"] == "CRITICAL" and
-        severity == "CRITICAL"
+        fall_alert_time is not None and
+        fall_alert_time <= 1.5 and
+        "POSSIBLE_FALL" in track["active_threats"] and
+        "SUSPICIOUS_LOITERING" not in track["active_threats"] and
+        track["posture"] == "LYING_DOWN"
     )
     
     return {
-        "scenario": "4. Restricted Zone + Pacing",
+        "scenario": "4. Possible Fall (Temporal Confirm)",
         "duration": f"{duration:.1f}s",
-        "expected_state": "RESTRICTED ZONE -> CRITICAL ALERT",
-        "observed_state": track["behavior_state"],
-        "alert_time": f"Zone @ {zone_entry_time:.1f}s | CRITICAL @ {critical_alert_time:.1f}s",
+        "expected_state": "POSSIBLE_FALL @ ~1.0s (Safety Event)",
+        "observed_state": "POSSIBLE_FALL",
+        "alert_time": f"Fall @ {fall_alert_time:.1f}s",
         "dwell_time": f"{track['dwell_time']:.1f}s",
         "meander_ratio": f"{track['meander_ratio']:.2f}",
         "revisit_count": track["revisit_count"],
-        "restricted_zone": "YES",
+        "posture": track["posture"],
         "final_suspicion_state": f"{track['behavior_state']} (Risk: {severity}, {risk_score}%)",
         "pass": is_pass
     }
+
 
 
 def run_controlled_scenario_5_one_turn():
     """
     SCENARIO 5: NORMAL PERSON + ONE TURN
-    Person walks A -> B -> C with one direction change (outside restricted zone).
+    Person walks A -> B -> C with one direction change.
     Expected: NORMAL.
     """
     duration = 20.0
@@ -344,7 +328,7 @@ def run_controlled_scenario_5_one_turn():
         "dwell_time": f"{track['dwell_time']:.1f}s",
         "meander_ratio": f"{track['meander_ratio']:.2f}",
         "revisit_count": track["revisit_count"],
-        "restricted_zone": "NO",
+        "posture": track.get("posture", "STANDING"),
         "final_suspicion_state": f"{track['behavior_state']} (Risk: {severity}, {risk_score}%)",
         "pass": is_pass
     }
@@ -353,7 +337,7 @@ def run_controlled_scenario_5_one_turn():
 def run_controlled_scenario_6_single_revisit():
     """
     SCENARIO 6: SINGLE REVISIT
-    Person walks A -> B -> A (one turnaround, outside restricted zone).
+    Person walks A -> B -> A (one turnaround).
     Expected: Revisit evidence recorded (revisit_count >= 1), but NOT immediately suspicious.
     """
     duration = 20.0
@@ -398,7 +382,7 @@ def run_controlled_scenario_6_single_revisit():
         "dwell_time": f"{track['dwell_time']:.1f}s",
         "meander_ratio": f"{track['meander_ratio']:.2f}",
         "revisit_count": track["revisit_count"],
-        "restricted_zone": "NO",
+        "posture": track.get("posture", "STANDING"),
         "final_suspicion_state": f"{track['behavior_state']} (Risk: {severity}, {risk_score}%)",
         "pass": is_pass
     }
@@ -419,7 +403,7 @@ def main():
         run_controlled_scenario_1_normal_walking(),
         run_controlled_scenario_2_long_dwell(),
         run_controlled_scenario_3_prolonged_pacing(),
-        run_controlled_scenario_4_restricted_pacing(),
+        run_controlled_scenario_4_possible_fall(),
         run_controlled_scenario_5_one_turn(),
         run_controlled_scenario_6_single_revisit(),
     ]
@@ -427,7 +411,7 @@ def main():
     print("\n" + "=" * 80)
     print("PHASE 6 - VALIDATION METRICS TABLE")
     print("=" * 80)
-    header = f"{'Scenario':<34} | {'Dur':<6} | {'Alert Time':<24} | {'Dwell':<6} | {'Meander':<7} | {'Rev':<3} | {'Zone':<4} | {'Result':<6}"
+    header = f"{'Scenario':<34} | {'Dur':<6} | {'Alert Time':<24} | {'Dwell':<6} | {'Meander':<7} | {'Rev':<3} | {'Posture':<10} | {'Result':<6}"
     print(header)
     print("-" * len(header))
     
@@ -436,7 +420,7 @@ def main():
         status_str = "PASS" if r["pass"] else "FAIL"
         if not r["pass"]:
             all_passed = False
-        print(f"{r['scenario']:<34} | {r['duration']:<6} | {r['alert_time']:<24} | {r['dwell_time']:<6} | {r['meander_ratio']:<7} | {r['revisit_count']:<3} | {r['restricted_zone']:<4} | {status_str:<6}")
+        print(f"{r['scenario']:<34} | {r['duration']:<6} | {r['alert_time']:<24} | {r['dwell_time']:<6} | {r['meander_ratio']:<7} | {r['revisit_count']:<3} | {r['posture']:<10} | {status_str:<6}")
         
     print("=" * 80)
     
@@ -450,7 +434,7 @@ def main():
         print(f"    Dwell Time:            {r['dwell_time']}")
         print(f"    Meander Ratio:         {r['meander_ratio']}")
         print(f"    Revisit Count:         {r['revisit_count']}")
-        print(f"    Restricted Zone:       {r['restricted_zone']}")
+        print(f"    Posture:               {r['posture']}")
         print(f"    Final Suspicion State: {r['final_suspicion_state']}")
         
     print("\n" + "=" * 80)

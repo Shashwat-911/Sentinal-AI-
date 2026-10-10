@@ -11,13 +11,8 @@ class SentinelConfig:
     # ── Operational Mode ──
     DEBUG_DETECTION = True               # Enable diagnostic logging for detection/model origins
 
-    # ── Object Detection & Suppression Thresholds ──
-    BAG_CONF_DEFAULT = 0.25             # Default confidence for luggage detector
-    PERSON_CONF_DEFAULT = 0.35          # Default confidence for person detector (class 0 only)
-    MAX_BAG_FRAME_AREA_RATIO = 0.70     # Discard boxes covering > 70% of frame (whole-scene artifact)
-    PERSON_BAG_CONTAINMENT_THRESH = 0.70 # Fraction of bag inside person body to trigger suppression
-    PERSON_HEAD_ZONE_RATIO = 0.35       # Upper fraction of person box considered head/torso
-    BAG_CONFIRMATION_FRAMES = 3         # Frames a bag candidate must persist to confirm new track
+    # ── Person Detection Thresholds ──
+    PERSON_CONF_DEFAULT = 0.35          # Default confidence for person detector (COCO class 0 only)
 
     # ── Multi-Object Tracker Parameters ──
     TRACK_MATCH_THRESHOLD = 100.0       # Max pixel distance for centroid matching
@@ -26,12 +21,6 @@ class SentinelConfig:
     BBOX_SMOOTHING_ALPHA = 0.75         # EMA factor for bbox smoothing (0.75 curr + 0.25 prev)
     VELOCITY_SMOOTHING_ALPHA = 0.30     # EMA factor for image-plane velocity (0.30 curr + 0.70 prev)
     TRACK_TIMEOUT = 3.0                 # Seconds to keep temporarily missing tracks
-
-    # ── Owner-Bag Proximity & Unattended Luggage ──
-    OWNER_RADIUS_PIXELS = 150.0         # Euclidean radius (px) for owner-bag association (Rowner)
-    PROXIMITY_RATIO = 0.25              # Fraction of frame diagonal fallback for proximity
-    STATIONARY_THRESHOLD = 15.0         # Seconds before an unattended bag reaches CRITICAL risk
-    STATIONARY_DISPLACEMENT_RATIO = 0.02 # Fraction of frame diagonal for stationary check
 
     # ── Behavioral Loitering & Suspicious Movement Analysis ──
     DWELL_TIME_THRESHOLD = 45.0         # Baseline Tdwell (seconds) before person dwell signal fires
@@ -49,31 +38,26 @@ class SentinelConfig:
     SPEED_RATIO_THRESHOLD = 2.5         # Ratio to past speed for sudden running detection
 
     # ── Multi-Signal Suspicion Scoring Weights (Sum to 100) ──
-    WEIGHT_DWELL = 25                   # Contribution of excessive dwell time
-    WEIGHT_MEANDER = 30                 # Contribution of high meander ratio (repetitive wandering)
-    WEIGHT_REVISIT = 25                 # Contribution of frequent spatial revisits
-    WEIGHT_RESTRICTED = 20              # Contribution of restricted-zone violation
+    WEIGHT_DWELL = 35                   # Contribution of excessive dwell time
+    WEIGHT_MEANDER = 35                 # Contribution of high meander ratio (repetitive wandering)
+    WEIGHT_REVISIT = 30                 # Contribution of frequent spatial revisits
 
     # ── Suspicion Score Level Thresholds (0-100 scale) ──
     SUSPICION_THRESH_OBSERVING = 15     # Mild observation threshold
     SUSPICION_THRESH_LOW = 30           # Low suspicion
     SUSPICION_THRESH_MEDIUM = 50        # Medium suspicion (e.g. dwell + repetitive movement)
     SUSPICION_THRESH_HIGH = 70          # High suspicion (loitering + revisits)
-    SUSPICION_THRESH_CRITICAL = 85      # Critical suspicion (loitering + restricted zone)
+    SUSPICION_THRESH_CRITICAL = 85      # Critical suspicion (sustained loitering + pacing/revisits)
 
     # ── Temporal Stability & Hysteresis ──
     SUSPICION_PERSISTENCE_FRAMES = 15   # Sustained frames before escalating to ALERT state
     SUSPICION_COOLDOWN_FRAMES = 30      # Frames of normal behavior before de-escalating
 
-    # ── Restricted Surveillance Zone (Phase 5) ──
-    RESTRICTED_ZONE_ENABLED = True
-    RESTRICTED_ZONE_MIN_FRAMES = 15      # Frames (~0.5s) inside zone before logging entry event
-    RESTRICTED_ZONE_COORDS = [
-        (0.60, 0.20),
-        (0.95, 0.20),
-        (0.95, 0.75),
-        (0.60, 0.75)
-    ]
+    # ── Human Posture Estimation Parameters ──
+    POSTURE_MODEL_PATH = "yolov8n-pose.pt"
+    POSTURE_CONF_THRESHOLD = 0.35
+    POSTURE_FALL_CONFIRMATION_FRAMES = 25  # ~1.0s sustained confirmation for possible fall
+    POSTURE_FALL_COOLDOWN = 15.0           # Seconds between repeated possible fall alerts
 
     # ── Alerting & System Cooldowns ──
     ALERT_COOLDOWN = 10.0               # Seconds between repeated alerts for same entity + event

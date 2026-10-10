@@ -26,7 +26,7 @@ Notes:
 - `ground_truth_onset` is optional and only used for alert latency.
 - Do not fabricate labels for videos that have not been manually labelled.
 - The existing repo contains validation tests and test videos, but it does not currently contain a sufficient real-world suspicious behaviour dataset for a statistically meaningful confusion matrix.
-- `LeftBag.mpg` is a luggage benchmark and is not a labelled suspicious-person dataset.
+- The bundled sample video is retained only as a generic headless smoke-test clip and is not a labelled suspicious-person dataset.
 
 ## Expected directories
 

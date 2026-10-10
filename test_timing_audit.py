@@ -26,8 +26,8 @@ print(f"Dwell threshold: {SentinelConfig.DWELL_TIME_THRESHOLD}s")
 print("=" * 70)
 
 # Load person model
-from app import load_dual_models
-bag_model, person_model, status = load_dual_models(BASE_DIR)
+from app import load_person_model
+person_model, status = load_person_model(BASE_DIR)
 print(f"Model status: {status}")
 
 # Open video

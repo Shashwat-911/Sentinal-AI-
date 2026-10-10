@@ -1,6 +1,6 @@
 """
 SENTINEL AI — Public Safety Surveillance System
-Full Tkinter desktop application for AI-based abandoned bag & loitering detection.
+Full Tkinter desktop application for AI-based person detection, tracking, behavior, and posture analysis.
 """
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -8,7 +8,7 @@ Full Tkinter desktop application for AI-based abandoned bag & loitering detectio
 # ═══════════════════════════════════════════════════════════════════════════════
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog
 import threading
 import os
 import sys
@@ -37,18 +37,22 @@ except ImportError:
 # GLOBAL STYLE & CONFIGURATION CONSTANTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-BG       = "#0a0a0a"
-PANEL    = "#111111"
-CARD     = "#1a1a1a"
-ACCENT   = "#00ff88"
-DANGER   = "#ff3333"
-WARNING  = "#ffaa00"
-TEXT     = "#e0e0e0"
-MUTED    = "#666666"
+BG       = "#0f141b"
+PANEL    = "#151b23"
+CARD     = "#1b2430"
+CARD_ALT = "#202a36"
+ACCENT   = "#5fd38d"
+DANGER   = "#ef6b73"
+WARNING  = "#d9a441"
+INFO     = "#7db7e8"
+TEXT     = "#e6edf3"
+MUTED    = "#8b98a8"
+BORDER   = "#2c3745"
 
-FONT_HEADING = ("Consolas", 16, "bold")
-FONT_BODY    = ("Consolas", 11)
-FONT_SMALL   = ("Consolas", 9)
+FONT_HEADING = ("Segoe UI", 16, "bold")
+FONT_BODY    = ("Segoe UI", 10)
+FONT_SMALL   = ("Segoe UI", 9)
+FONT_MONO    = ("Consolas", 9)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -59,28 +63,19 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from sentinel.config import SentinelConfig
 from sentinel.detection import (
-    OBJECT_GROUP_MAP, get_object_group, is_bag_object, is_person,
-    load_dual_models, detect_bags, detect_persons,
-    filter_bag_person_false_positives, calculate_iou, iou_deduplicate
+    OBJECT_GROUP_MAP, get_object_group, is_person,
+    load_person_model, detect_persons, calculate_iou, iou_deduplicate
 )
 from sentinel.tracking import (
-    TrackStatus, TrackState, match_entities,
-    match_bag_centroids, match_person_centroids
+    TrackStatus, TrackState, match_entities, match_person_centroids
 )
 from sentinel.behavior import (
     compute_dwell_time, compute_trajectory_metrics, update_grid_revisits,
     evaluate_person_behavior
 )
-from sentinel.risk import (
-    calculate_entity_risk, check_owner_proximity_and_returns,
-    analyze_behaviors
-)
+from sentinel.risk import calculate_entity_risk, analyze_behaviors
 from sentinel.alerting import draw_overlays
-
-
-def check_owner_return(tracked_bags, tracked_persons, return_radius=150):
-    """Backward-compatibility stub for legacy tests."""
-    return set()
+from sentinel.posture import load_pose_model, estimate_postures
 
 
 def frame_to_tk(frame, canvas_w, canvas_h):
@@ -125,6 +120,19 @@ class SentinelApp:
         self._last_frame = None
         self._alert_sound_active = False
         self._alert_sound_thread = None
+        self.app_pages = {}
+        self.nav_buttons = {}
+        self.current_page = None
+        self.incidents = []
+        self.unread_incidents = 0
+        self.vid_processing_fps = 0.0
+        self.cam_processing_fps = 0.0
+        self.video_duration = 0.0
+        self.video_position = 0.0
+        self.video_source_status = "No file selected"
+        self.camera_source_status = "Disconnected"
+        self.model_status_text = "Models not loaded"
+        self.pose_status_text = "Pose model not loaded"
 
         self._setup_styles()
         self._build_header()
@@ -134,6 +142,11 @@ class SentinelApp:
         self._build_train_tab()
         self._build_video_tab()
         self._build_camera_tab()
+        self._build_incidents_page()
+        self._build_overview_page()
+        self._build_settings_page()
+        self._show_page("overview")
+        self._refresh_overview()
         self._update_clock()
 
     # ── Cleanup ──────────────────────────────────────────────────────────────
@@ -154,12 +167,19 @@ class SentinelApp:
         style = ttk.Style()
         style.theme_use("default")
 
-        style.configure("TNotebook", background=BG, borderwidth=0, tabmargins=0)
-        style.configure("TNotebook.Tab", background=CARD, foreground=MUTED,
-                         font=FONT_BODY, padding=[22, 10])
-        style.map("TNotebook.Tab",
-                  background=[("selected", PANEL)],
-                  foreground=[("selected", ACCENT)])
+        style.configure("TFrame", background=BG)
+        style.configure("TLabel", background=BG, foreground=TEXT, font=FONT_BODY)
+        style.configure("TCombobox", fieldbackground=CARD, background=CARD,
+                        foreground=TEXT, arrowcolor=TEXT, bordercolor=BORDER)
+        style.map("TCombobox", fieldbackground=[("readonly", CARD)],
+                  foreground=[("readonly", TEXT)])
+        style.configure("Treeview", background=CARD, fieldbackground=CARD,
+                        foreground=TEXT, rowheight=26, borderwidth=0,
+                        font=FONT_SMALL)
+        style.configure("Treeview.Heading", background=PANEL, foreground=TEXT,
+                        font=("Segoe UI", 9, "bold"), borderwidth=0)
+        style.map("Treeview", background=[("selected", CARD_ALT)],
+                  foreground=[("selected", TEXT)])
 
         style.configure("Horizontal.TProgressbar",
                          background=ACCENT, troughcolor=CARD, borderwidth=0, thickness=6)
@@ -187,21 +207,74 @@ class SentinelApp:
     # ── Notebook ─────────────────────────────────────────────────────────────
 
     def _build_notebook(self):
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill="both", expand=True)
+        shell = tk.Frame(self.root, bg=BG)
+        shell.pack(fill="both", expand=True)
 
-        self.tab_dataset = tk.Frame(self.notebook, bg=BG)
-        self.tab_train   = tk.Frame(self.notebook, bg=BG)
-        self.tab_video   = tk.Frame(self.notebook, bg=BG)
-        self.tab_camera  = tk.Frame(self.notebook, bg=BG)
-        self.tab_stats   = tk.Frame(self.notebook, bg=BG)
+        self.sidebar = tk.Frame(shell, bg=PANEL, width=210)
+        self.sidebar.pack(side="left", fill="y")
+        self.sidebar.pack_propagate(False)
 
-        self.notebook.add(self.tab_dataset, text="  [ DATASET ]  ")
-        self.notebook.add(self.tab_train,   text="  [ TRAIN ]  ")
-        self.notebook.add(self.tab_video,   text="  [ VIDEO DEMO ]  ")
-        self.notebook.add(self.tab_camera,  text="  [ LIVE CAMERA ]  ")
-        self.notebook.add(self.tab_stats,   text="  [ STATS ]  ")
+        brand = tk.Frame(self.sidebar, bg=PANEL)
+        brand.pack(fill="x", padx=14, pady=(18, 14))
+        tk.Label(brand, text="OPERATIONS", font=("Segoe UI", 9, "bold"),
+                 fg=MUTED, bg=PANEL).pack(anchor="w")
+        self.nav_incident_badge = tk.Label(brand, text="0 new incidents",
+                                           font=FONT_SMALL, fg=MUTED, bg=PANEL)
+        self.nav_incident_badge.pack(anchor="w", pady=(3, 0))
+
+        self.content = tk.Frame(shell, bg=BG)
+        self.content.pack(side="left", fill="both", expand=True)
+        self.content.grid_rowconfigure(0, weight=1)
+        self.content.grid_columnconfigure(0, weight=1)
+
+        nav_items = [
+            ("overview", "Overview"),
+            ("camera", "Live Monitoring"),
+            ("video", "Video Analysis"),
+            ("incidents", "Incidents"),
+            ("dataset", "Dataset"),
+            ("train", "Training"),
+            ("stats", "Statistics"),
+            ("settings", "Settings"),
+        ]
+        for key, label in nav_items:
+            btn = tk.Button(self.sidebar, text=label, anchor="w", font=FONT_BODY,
+                            bg=PANEL, fg=TEXT, activebackground=CARD_ALT,
+                            activeforeground=TEXT, relief="flat", bd=0,
+                            cursor="hand2", padx=18, pady=11,
+                            command=lambda k=key: self._show_page(k))
+            btn.pack(fill="x", padx=10, pady=2)
+            self.nav_buttons[key] = btn
+
+        self.tab_overview = self._new_page("overview")
+        self.tab_camera = self._new_page("camera")
+        self.tab_video = self._new_page("video")
+        self.tab_incidents = self._new_page("incidents")
+        self.tab_dataset = self._new_page("dataset")
+        self.tab_train = self._new_page("train")
+        self.tab_stats = self._new_page("stats")
+        self.tab_settings = self._new_page("settings")
         self._build_stats_tab()
+
+    def _new_page(self, name):
+        page = tk.Frame(self.content, bg=BG)
+        page.grid(row=0, column=0, sticky="nsew")
+        self.app_pages[name] = page
+        return page
+
+    def _show_page(self, name):
+        page = self.app_pages.get(name)
+        if not page:
+            return
+        page.tkraise()
+        self.current_page = name
+        for key, btn in self.nav_buttons.items():
+            selected = key == name
+            btn.config(bg=CARD_ALT if selected else PANEL,
+                       fg=ACCENT if selected else TEXT)
+        if name == "incidents":
+            self.unread_incidents = 0
+            self._update_incident_badges()
 
     # ── Status Bar ───────────────────────────────────────────────────────────
 
@@ -220,6 +293,214 @@ class SentinelApp:
     def _set_status(self, text, color=ACCENT):
         self.status_var.set(text)
         self.status_label.config(fg=color)
+
+    # ── Shared UI builders ─────────────────────────────────────────────────
+
+    def _section_header(self, parent, title, subtitle=None):
+        box = tk.Frame(parent, bg=BG)
+        box.pack(fill="x", padx=18, pady=(16, 8))
+        tk.Label(box, text=title, font=("Segoe UI", 18, "bold"),
+                 fg=TEXT, bg=BG).pack(anchor="w")
+        if subtitle:
+            tk.Label(box, text=subtitle, font=FONT_SMALL,
+                     fg=MUTED, bg=BG).pack(anchor="w", pady=(2, 0))
+        return box
+
+    def _metric_card(self, parent, title, value_var, accent=ACCENT):
+        card = tk.Frame(parent, bg=CARD, highlightthickness=1, highlightbackground=BORDER)
+        tk.Label(card, text=title, font=("Segoe UI", 9, "bold"),
+                 fg=MUTED, bg=CARD).pack(anchor="w", padx=14, pady=(12, 0))
+        tk.Label(card, textvariable=value_var, font=("Segoe UI", 19, "bold"),
+                 fg=accent, bg=CARD).pack(anchor="w", padx=14, pady=(4, 12))
+        return card
+
+    def _set_text(self, widget, text):
+        widget.config(state="normal")
+        widget.delete("1.0", "end")
+        widget.insert("1.0", text)
+        widget.config(state="disabled")
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # PAGE — OVERVIEW
+    # ═════════════════════════════════════════════════════════════════════════
+
+    def _build_overview_page(self):
+        self._section_header(
+            self.tab_overview,
+            "Overview",
+            "Live operational state from the current camera, video analysis, models, and incident stream."
+        )
+
+        self.overview_vars = {
+            "camera": tk.StringVar(value="Disconnected"),
+            "fps": tk.StringVar(value="0.0 FPS"),
+            "people": tk.StringVar(value="0"),
+            "incidents": tk.StringVar(value="0 active"),
+            "models": tk.StringVar(value="Not loaded"),
+        }
+
+        cards = tk.Frame(self.tab_overview, bg=BG)
+        cards.pack(fill="x", padx=18, pady=(4, 12))
+        items = [
+            ("Camera / Stream", "camera", INFO),
+            ("Processing FPS", "fps", ACCENT),
+            ("Tracked People", "people", INFO),
+            ("Active Incidents", "incidents", DANGER),
+            ("Model Status", "models", ACCENT),
+        ]
+        for idx, (title, key, color) in enumerate(items):
+            card = self._metric_card(cards, title, self.overview_vars[key], color)
+            card.grid(row=idx // 3, column=idx % 3, sticky="nsew", padx=6, pady=6)
+        for col in range(3):
+            cards.grid_columnconfigure(col, weight=1)
+
+        body = tk.Frame(self.tab_overview, bg=BG)
+        body.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+        body.grid_columnconfigure(0, weight=3)
+        body.grid_columnconfigure(1, weight=2)
+        body.grid_rowconfigure(0, weight=1)
+
+        events_panel = tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=BORDER)
+        events_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        tk.Label(events_panel, text="Recent Events", font=("Segoe UI", 12, "bold"),
+                 fg=TEXT, bg=CARD).pack(anchor="w", padx=14, pady=(12, 4))
+        self.overview_events = tk.Text(events_panel, bg=CARD, fg=TEXT, font=FONT_MONO,
+                                       relief="flat", padx=12, pady=8, height=12,
+                                       highlightthickness=0)
+        self.overview_events.pack(fill="both", expand=True, padx=8, pady=(0, 10))
+        self.overview_events.config(state="disabled")
+
+        model_panel = tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=BORDER)
+        model_panel.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        tk.Label(model_panel, text="Runtime", font=("Segoe UI", 12, "bold"),
+                 fg=TEXT, bg=CARD).pack(anchor="w", padx=14, pady=(12, 4))
+        self.overview_runtime = tk.Text(model_panel, bg=CARD, fg=TEXT, font=FONT_MONO,
+                                        relief="flat", padx=12, pady=8,
+                                        highlightthickness=0)
+        self.overview_runtime.pack(fill="both", expand=True, padx=8, pady=(0, 10))
+        self.overview_runtime.config(state="disabled")
+
+    def _refresh_overview(self):
+        cam_entities = getattr(self, "cam_tracked_entities", {})
+        vid_entities = getattr(self, "vid_tracked_entities", {})
+        active_entities = cam_entities if self.camera_running else vid_entities
+        people = sum(1 for e in active_entities.values() if is_person(e.get("class_name", "")))
+        active_incidents = sum(1 for i in self.incidents if not i.get("acknowledged"))
+        fps = self.cam_processing_fps if self.camera_running else self.vid_processing_fps
+        stream = self.camera_source_status if self.camera_running else self.video_source_status
+        if not self.camera_running and not self.video_running and self.video_path is None:
+            stream = self.camera_source_status
+
+        self.overview_vars["camera"].set(stream)
+        self.overview_vars["fps"].set(f"{fps:.1f} FPS")
+        self.overview_vars["people"].set(str(people))
+        self.overview_vars["incidents"].set(f"{active_incidents} active")
+        self.overview_vars["models"].set(self.model_status_text)
+
+        recent = self.incidents[-10:]
+        if recent:
+            lines = [
+                f"[{i['time']}] {i['severity']:<8} {i['category']:<22} "
+                f"{i['object_label']}  {i['summary']}"
+                for i in reversed(recent)
+            ]
+            self._set_text(self.overview_events, "\n".join(lines))
+        else:
+            self._set_text(self.overview_events, "No incidents recorded this session.")
+
+        runtime = (
+            f"Application status: {self.status_var.get()}\n"
+            f"Camera: {self.camera_source_status}\n"
+            f"Video: {self.video_source_status}\n"
+            f"Video time: {self._format_seconds(self.video_position)} / {self._format_seconds(self.video_duration)}\n"
+            f"Detection models: {self.model_status_text}\n"
+            f"Pose model: {self.pose_status_text}\n"
+            f"Confidence threshold: camera {getattr(self, 'cam_conf', tk.DoubleVar(value=0.25)).get():.2f}, "
+            f"video {getattr(self, 'vid_conf', tk.DoubleVar(value=0.25)).get():.2f}"
+        )
+        self._set_text(self.overview_runtime, runtime)
+        self.root.after(1000, self._refresh_overview)
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # PAGE — INCIDENTS
+    # ═════════════════════════════════════════════════════════════════════════
+
+    def _build_incidents_page(self):
+        self._section_header(
+            self.tab_incidents,
+            "Incidents",
+            "Non-modal incident history with severity, evidence, acknowledgement and snapshot paths."
+        )
+        filters = tk.Frame(self.tab_incidents, bg=BG)
+        filters.pack(fill="x", padx=18, pady=(0, 8))
+        tk.Label(filters, text="Category", font=FONT_SMALL, fg=MUTED, bg=BG).pack(side="left")
+        self.incident_category_filter = tk.StringVar(value="All")
+        self.incident_category_combo = ttk.Combobox(filters, textvariable=self.incident_category_filter,
+                                                    values=["All"], state="readonly", width=22)
+        self.incident_category_combo.pack(side="left", padx=(6, 16))
+        tk.Label(filters, text="Severity", font=FONT_SMALL, fg=MUTED, bg=BG).pack(side="left")
+        self.incident_severity_filter = tk.StringVar(value="All")
+        ttk.Combobox(filters, textvariable=self.incident_severity_filter,
+                     values=["All", "LOW", "MEDIUM", "HIGH", "CRITICAL"], state="readonly",
+                     width=12).pack(side="left", padx=(6, 16))
+        tk.Button(filters, text="Apply Filter", font=FONT_SMALL, bg=CARD, fg=TEXT,
+                  relief="flat", command=self._refresh_incidents_view).pack(side="left")
+        tk.Button(filters, text="Acknowledge Selected", font=FONT_SMALL, bg=CARD, fg=ACCENT,
+                  relief="flat", command=self._ack_selected_incident).pack(side="left", padx=8)
+        tk.Button(filters, text="Dismiss Selected", font=FONT_SMALL, bg=CARD, fg=WARNING,
+                  relief="flat", command=self._dismiss_selected_incident).pack(side="left")
+
+        columns = ("time", "source", "category", "severity", "target", "status", "evidence")
+        self.incident_tree = ttk.Treeview(self.tab_incidents, columns=columns, show="headings", height=14)
+        widths = [90, 90, 170, 90, 90, 120, 440]
+        for col, width in zip(columns, widths):
+            self.incident_tree.heading(col, text=col.title())
+            self.incident_tree.column(col, width=width, anchor="w")
+        self.incident_tree.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+        self.incident_tree.bind("<<TreeviewSelect>>", lambda _e: self._show_selected_incident_details())
+
+        details = tk.Frame(self.tab_incidents, bg=CARD, highlightthickness=1, highlightbackground=BORDER, height=130)
+        details.pack(fill="x", padx=18, pady=(0, 18))
+        details.pack_propagate(False)
+        tk.Label(details, text="Incident Details", font=("Segoe UI", 11, "bold"),
+                 fg=TEXT, bg=CARD).pack(anchor="w", padx=12, pady=(8, 0))
+        self.incident_details = tk.Text(details, bg=CARD, fg=TEXT, font=FONT_MONO,
+                                        relief="flat", height=5, padx=10, pady=6,
+                                        highlightthickness=0)
+        self.incident_details.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.incident_details.config(state="disabled")
+
+    def _build_settings_page(self):
+        self._section_header(
+            self.tab_settings,
+            "Settings",
+            "Runtime configuration that is already supported by the current application."
+        )
+        panel = tk.Frame(self.tab_settings, bg=CARD, highlightthickness=1, highlightbackground=BORDER)
+        panel.pack(fill="x", padx=18, pady=8)
+        self.settings_text = tk.Text(panel, bg=CARD, fg=TEXT, font=FONT_MONO,
+                                     relief="flat", padx=12, pady=12,
+                                     height=14, highlightthickness=0)
+        self.settings_text.pack(fill="x")
+        self.settings_text.config(state="disabled")
+        tk.Button(self.tab_settings, text="Refresh Runtime Settings", font=FONT_BODY,
+                  bg=CARD, fg=ACCENT, relief="flat",
+                  command=self._refresh_settings_page).pack(anchor="w", padx=18, pady=8)
+        self._refresh_settings_page()
+
+    def _refresh_settings_page(self):
+        text = (
+            f"Person confidence default: {SentinelConfig.PERSON_CONF_DEFAULT:.2f}\n"
+            f"Camera confidence slider: {getattr(self, 'cam_conf', tk.DoubleVar(value=0.25)).get():.2f}\n"
+            f"Video confidence slider: {getattr(self, 'vid_conf', tk.DoubleVar(value=0.25)).get():.2f}\n"
+            f"Camera index: {getattr(self, 'cam_idx_var', tk.StringVar(value='0')).get()}\n"
+            f"Dwell threshold: {SentinelConfig.DWELL_TIME_THRESHOLD:.0f}s\n"
+            f"Fall confirmation frames: {SentinelConfig.POSTURE_FALL_CONFIRMATION_FRAMES}\n"
+            f"Alert cooldown: {SentinelConfig.ALERT_COOLDOWN:.0f}s\n"
+            f"Detection models: {self.model_status_text}\n"
+            f"Pose model: {self.pose_status_text}"
+        )
+        self._set_text(self.settings_text, text)
 
     # ═════════════════════════════════════════════════════════════════════════
     # TAB 1 — DATASET
@@ -531,9 +812,8 @@ class SentinelApp:
             if epochs_val <= 0 or imgsz_val <= 0 or batch_val <= 0:
                 raise ValueError("Values must be positive")
         except ValueError:
-            messagebox.showerror(
-                "Invalid Input",
-                "Epochs, Image Size, and Batch Size must be positive integers.")
+            self._set_status("INVALID TRAINING INPUT", DANGER)
+            self._tlog("Epochs, Image Size, and Batch Size must be positive integers.")
             return
 
         self.train_losses.clear()
@@ -742,11 +1022,12 @@ class SentinelApp:
         self.btn_test.config(state="normal", bg=ACCENT, fg=BG)
         self._set_status("IDLE", ACCENT)
         self._export_training_graphs()
-        messagebox.showinfo("Training Complete",
-                            f"✅ Training Complete\n"
-                            f"Model saved to {self.savedir_var.get()}\n"
-                            f"Excel log: {os.path.basename(self.excel_log_path) if self.excel_log_path else 'N/A'}\n"
-                            f"Graphs saved to models/ folder")
+        self._tlog(
+            "Training complete. "
+            f"Model saved to {self.savedir_var.get()}; "
+            f"Excel log: {os.path.basename(self.excel_log_path) if self.excel_log_path else 'N/A'}; "
+            "graphs saved to models/ folder."
+        )
 
     def _export_training_graphs(self):
         """Save loss and mAP charts as PNG files to the models/ folder."""
@@ -826,10 +1107,10 @@ class SentinelApp:
         if not filepath:
             return
 
-        bag_model, person_model, status = load_dual_models(BASE_DIR)
-        model = bag_model if bag_model is not None else person_model
+        model, status = load_person_model(BASE_DIR)
         if model is None:
-            messagebox.showerror("Error", status)
+            self._set_status(f"MODEL ERROR: {status}", DANGER)
+            self._tlog(f"Model test unavailable: {status}")
             return
 
         results = model(filepath, verbose=False)
@@ -867,6 +1148,9 @@ class SentinelApp:
         self.video_fname = tk.Label(ctrl, text="No file selected", font=FONT_SMALL,
                                      fg=MUTED, bg=PANEL)
         self.video_fname.pack(side="left", padx=5)
+        self.video_time_label = tk.Label(ctrl, text="00:00 / 00:00", font=FONT_SMALL,
+                                         fg=MUTED, bg=PANEL)
+        self.video_time_label.pack(side="left", padx=(8, 5))
 
         self.btn_vid_play = tk.Button(ctrl, text="\u25B6 PLAY", font=FONT_BODY,
                                        bg=ACCENT, fg=BG, relief="flat", cursor="hand2",
@@ -898,6 +1182,9 @@ class SentinelApp:
 
         self.vid_canvas = tk.Canvas(left_col, bg="black", highlightthickness=0)
         self.vid_canvas.pack(pady=5, fill="both", expand=True)
+        self.video_progress = ttk.Progressbar(left_col, mode="determinate",
+                                              style="Horizontal.TProgressbar")
+        self.video_progress.pack(fill="x", pady=(0, 6))
 
         hist_frame = tk.Frame(left_col, bg=CARD, height=105)
         hist_frame.pack(pady=(0, 5), fill="x")
@@ -933,7 +1220,7 @@ class SentinelApp:
         right_col.pack(side="right", fill="both", expand=False, padx=(10, 0))
         right_col.pack_propagate(False)
 
-        tk.Label(right_col, text="TACTICAL BEHAVIOR HUD", font=FONT_HEADING,
+        tk.Label(right_col, text="ANALYSIS DETAILS", font=FONT_HEADING,
                  fg=ACCENT, bg=PANEL).pack(pady=(15, 10))
 
         # Active Targets Display
@@ -973,14 +1260,18 @@ class SentinelApp:
         if path:
             self.video_path = path
             self.video_fname.config(text=os.path.basename(path), fg=TEXT)
+            self.video_source_status = f"Selected {os.path.basename(path)}"
             self.btn_vid_play.config(state="normal")
 
     def _play_video(self):
         if not self.video_path:
             return
 
-        bag_model, person_model, status = load_dual_models(BASE_DIR)
-        if bag_model is None and person_model is None:
+        person_model, status = load_person_model(BASE_DIR)
+        pose_model = load_pose_model(BASE_DIR)
+        self.model_status_text = status
+        self.pose_status_text = "Available" if pose_model is not None else "Unavailable"
+        if person_model is None:
             self._canvas_msg(self.vid_canvas, f"Models failed to load: {status}")
             return
 
@@ -989,11 +1280,12 @@ class SentinelApp:
         self.vid_fcount = 0
         self.btn_vid_play.config(state="disabled")
         self.btn_vid_stop.config(state="normal")
+        self.video_source_status = f"Processing {os.path.basename(self.video_path)}"
         self._set_status("DETECTING", WARNING)
 
-        threading.Thread(target=self._video_worker, args=(bag_model, person_model), daemon=True).start()
+        threading.Thread(target=self._video_worker, args=(person_model, pose_model), daemon=True).start()
 
-    def _video_worker(self, bag_model, person_model):
+    def _video_worker(self, person_model, pose_model):
         cap = None
         try:
             if not self.video_path or not os.path.isfile(self.video_path):
@@ -1008,7 +1300,10 @@ class SentinelApp:
                 return
 
             fps = cap.get(cv2.CAP_PROP_FPS) or 30
+            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+            self.video_duration = (frame_count / fps) if fps else 0.0
             delay = 1.0 / max(fps, 1)
+            perf_last = time.perf_counter()
 
             while self.video_running and cap.isOpened():
                 ret, frame = cap.read()
@@ -1016,46 +1311,57 @@ class SentinelApp:
                     break
 
                 self.vid_fcount += 1
+                video_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+                if video_time <= 0:
+                    video_time = self.vid_fcount / max(fps, 1)
+                self.video_position = video_time
+                perf_now = time.perf_counter()
+                dt = perf_now - perf_last
+                perf_last = perf_now
+                if dt > 0:
+                    self.vid_processing_fps = 1.0 / dt
                 
-                # Model inference
-                bag_dets = detect_bags(frame, bag_model, self.vid_conf.get())
-                person_dets = detect_persons(frame, person_model, SentinelConfig.PERSON_CONF_DEFAULT)
-                
-                # Filter false-positive luggage candidates overlapping person bodies
-                clean_bags = filter_bag_person_false_positives(bag_dets, person_dets)
-                
-                # Combine & Deduplicate
-                merged_dets = clean_bags + person_dets
-                merged_dets = iou_deduplicate(merged_dets)
+                person_dets = detect_persons(frame, person_model, self.vid_conf.get())
+                merged_dets = iou_deduplicate(person_dets)
 
                 # Tracking match
-                self.vid_tracked_entities = match_entities(merged_dets, self.vid_tracked_entities)
+                self.vid_tracked_entities = match_entities(
+                    merged_dets, self.vid_tracked_entities, current_time=video_time
+                )
                 
-                # Behavior analysis and overlay drawing
-                annotated, new_alerts = draw_overlays(frame, self.vid_tracked_entities, self.vid_fcount)
+                # Human posture estimation & temporal fall check
+                fall_alerts = estimate_postures(
+                    frame, self.vid_tracked_entities, pose_model, current_time=video_time
+                )
+
+                # Behavior analysis and overlay drawing (renders skeleton and telemetry)
+                annotated, new_alerts = draw_overlays(
+                    frame, self.vid_tracked_entities, self.vid_fcount, current_time=video_time
+                )
+                new_alerts = fall_alerts + new_alerts
                 self._last_frame = annotated.copy()
 
                 # Update live HUD statistics on every frame
                 self.root.after(0, self._update_hud_sidebar, "vid", self.vid_tracked_entities)
 
                 self.root.after(0, self._update_conf_histogram,
-                                bag_dets, person_dets,
+                                person_dets,
                                 self.vid_hist_ax, self.vid_hist_canvas,
                                 self.vid_conf_history)
 
                 # Process newly triggered suspicious behavior alerts
                 for alert in new_alerts:
-                    # Critical unattended bag triggers alarm & snapshot
-                    is_critical_unattended = (alert["behavior"] == "UNATTENDED_OBJECT" and alert["severity"] == "CRITICAL")
                     is_high_threat = (alert["severity"] in ("HIGH", "CRITICAL"))
                     
-                    if is_critical_unattended or is_high_threat:
+                    if is_high_threat or alert["behavior"] == "POSSIBLE_FALL":
                         snapshot = annotated.copy()
-                        self._save_incident_snapshot(snapshot, alert["behavior"], alert["track_id"], alert["severity"])
+                        alert["snapshot_path"] = self._save_incident_snapshot(
+                            snapshot, alert["behavior"], alert["track_id"], alert["severity"])
                         self.root.after(0, self._play_alert_sound)
 
                     self.root.after(0, self._fire_behavior_alert, "vid", alert)
 
+                self.root.after(0, self._update_video_progress)
                 self.root.after(0, self._show_frame, annotated, self.vid_canvas)
                 time.sleep(delay)
 
@@ -1076,9 +1382,21 @@ class SentinelApp:
 
     def _video_stopped(self):
         self.video_running = False
+        self.video_source_status = "Stopped"
         self.btn_vid_play.config(state="normal")
         self.btn_vid_stop.config(state="disabled")
         self._set_status("IDLE", ACCENT)
+
+    def _update_video_progress(self):
+        if hasattr(self, "video_time_label"):
+            self.video_time_label.config(
+                text=f"{self._format_seconds(self.video_position)} / {self._format_seconds(self.video_duration)}"
+            )
+        if hasattr(self, "video_progress"):
+            if self.video_duration > 0:
+                self.video_progress.config(maximum=self.video_duration, value=min(self.video_position, self.video_duration))
+            else:
+                self.video_progress.config(value=0)
 
     # ═════════════════════════════════════════════════════════════════════════
     # TAB 4 — LIVE CAMERA
@@ -1101,6 +1419,12 @@ class SentinelApp:
                                        activebackground="#cc2929",
                                        command=self._stop_camera, state="disabled")
         self.btn_cam_stop.pack(side="left", padx=5, pady=8)
+        self.cam_status_inline = tk.Label(ctrl, text="Disconnected", font=FONT_SMALL,
+                                          fg=MUTED, bg=PANEL)
+        self.cam_status_inline.pack(side="left", padx=(10, 4))
+        self.cam_fps_inline = tk.Label(ctrl, text="0.0 FPS", font=FONT_SMALL,
+                                       fg=MUTED, bg=PANEL)
+        self.cam_fps_inline.pack(side="left", padx=4)
 
         tk.Label(ctrl, text="CAMERA", font=FONT_SMALL, fg=MUTED,
                  bg=PANEL).pack(side="left", padx=(20, 5))
@@ -1162,7 +1486,7 @@ class SentinelApp:
         right_col.pack(side="right", fill="both", expand=False, padx=(10, 0))
         right_col.pack_propagate(False)
 
-        tk.Label(right_col, text="TACTICAL BEHAVIOR HUD", font=FONT_HEADING,
+        tk.Label(right_col, text="TARGET DETAILS", font=FONT_HEADING,
                  fg=ACCENT, bg=PANEL).pack(pady=(15, 10))
 
         tk.Label(right_col, text="ACTIVE TARGETS", font=FONT_SMALL, fg=MUTED,
@@ -1191,8 +1515,11 @@ class SentinelApp:
         self.cam_fcount = 0
 
     def _start_camera(self):
-        bag_model, person_model, status = load_dual_models(BASE_DIR)
-        if bag_model is None and person_model is None:
+        person_model, status = load_person_model(BASE_DIR)
+        pose_model = load_pose_model(BASE_DIR)
+        self.model_status_text = status
+        self.pose_status_text = "Available" if pose_model is not None else "Unavailable"
+        if person_model is None:
             self.root.after(50, lambda: self._canvas_msg(
                 self.cam_canvas, f"Models failed to load: {status}"))
             return
@@ -1208,12 +1535,14 @@ class SentinelApp:
         self.cam_fcount = 0
         self.btn_cam_start.config(state="disabled")
         self.btn_cam_stop.config(state="normal")
+        self.camera_source_status = f"Connecting camera {cam_idx}"
+        self.cam_status_inline.config(text=self.camera_source_status, fg=WARNING)
         self._set_status("CONNECTING TO CAMERA...", WARNING)
 
         threading.Thread(target=self._camera_worker,
-                         args=(bag_model, person_model, cam_idx), daemon=True).start()
+                         args=(person_model, pose_model, cam_idx), daemon=True).start()
 
-    def _camera_worker(self, bag_model, person_model, cam_idx):
+    def _camera_worker(self, person_model, pose_model, cam_idx):
         cap = None
         try:
             cap = cv2.VideoCapture(cam_idx)
@@ -1221,6 +1550,7 @@ class SentinelApp:
                 self.root.after(0, self._canvas_msg, self.cam_canvas,
                                 f"\u26A0 No camera detected at index {cam_idx}\nPlease check webcam connection or select another index.")
                 self.root.after(0, self._set_status, f"CAMERA NOT FOUND (idx {cam_idx})", DANGER)
+                self.camera_source_status = f"Camera {cam_idx} unavailable"
                 return
 
             # Test-read first frame
@@ -1229,11 +1559,15 @@ class SentinelApp:
                 self.root.after(0, self._canvas_msg, self.cam_canvas,
                                 f"\u26A0 Failed to read feed from camera index {cam_idx}")
                 self.root.after(0, self._set_status, f"CAMERA READ FAILED (idx {cam_idx})", DANGER)
+                self.camera_source_status = f"Camera {cam_idx} read failed"
                 return
 
             self.root.after(0, self._set_status, "CAMERA ACTIVE", ACCENT)
+            self.camera_source_status = f"Camera {cam_idx} active"
+            self.root.after(0, self._update_camera_inline_status)
 
             failed_reads = 0
+            perf_last = time.perf_counter()
             while self.camera_running and cap.isOpened():
                 ret, frame = cap.read()
                 if not ret or frame is None or frame.size == 0:
@@ -1242,45 +1576,59 @@ class SentinelApp:
                         self.root.after(0, self._canvas_msg, self.cam_canvas,
                                         f"\u26A0 Camera feed lost or disconnected (index {cam_idx})")
                         self.root.after(0, self._set_status, "CAMERA DISCONNECTED", DANGER)
+                        self.camera_source_status = f"Camera {cam_idx} disconnected"
+                        self.root.after(0, self._update_camera_inline_status)
                         break
                     time.sleep(0.03)
                     continue
 
                 failed_reads = 0
                 self.cam_fcount += 1
+                frame_time = time.time()
+                perf_now = time.perf_counter()
+                dt = perf_now - perf_last
+                perf_last = perf_now
+                if dt > 0:
+                    self.cam_processing_fps = 1.0 / dt
                 
-                bag_dets = detect_bags(frame, bag_model, self.cam_conf.get())
-                person_dets = detect_persons(frame, person_model, SentinelConfig.PERSON_CONF_DEFAULT)
-                
-                # Filter false-positive luggage candidates overlapping person bodies
-                clean_bags = filter_bag_person_false_positives(bag_dets, person_dets)
-                
-                # Combine & Deduplicate
-                merged_dets = clean_bags + person_dets
-                merged_dets = iou_deduplicate(merged_dets)
+                person_dets = detect_persons(frame, person_model, self.cam_conf.get())
+                merged_dets = iou_deduplicate(person_dets)
 
-                self.cam_tracked_entities = match_entities(merged_dets, self.cam_tracked_entities)
-                annotated, new_alerts = draw_overlays(frame, self.cam_tracked_entities, self.cam_fcount)
+                self.cam_tracked_entities = match_entities(
+                    merged_dets, self.cam_tracked_entities, current_time=frame_time
+                )
+                
+                # Human posture estimation & temporal fall check
+                fall_alerts = estimate_postures(
+                    frame, self.cam_tracked_entities, pose_model, current_time=frame_time
+                )
+
+                # Behavior analysis and overlay drawing (renders skeleton and telemetry)
+                annotated, new_alerts = draw_overlays(
+                    frame, self.cam_tracked_entities, self.cam_fcount, current_time=frame_time
+                )
+                new_alerts = fall_alerts + new_alerts
                 self._last_frame = annotated.copy()
 
                 self.root.after(0, self._update_hud_sidebar, "cam", self.cam_tracked_entities)
 
                 self.root.after(0, self._update_conf_histogram,
-                                bag_dets, person_dets,
+                                person_dets,
                                 self.cam_hist_ax, self.cam_hist_canvas,
                                 self.cam_conf_history)
 
                 for alert in new_alerts:
-                    is_critical_unattended = (alert["behavior"] == "UNATTENDED_OBJECT" and alert["severity"] == "CRITICAL")
                     is_high_threat = (alert["severity"] in ("HIGH", "CRITICAL"))
                     
-                    if is_critical_unattended or is_high_threat:
+                    if is_high_threat or alert["behavior"] == "POSSIBLE_FALL":
                         snapshot = annotated.copy()
-                        self._save_incident_snapshot(snapshot, alert["behavior"], alert["track_id"], alert["severity"])
+                        alert["snapshot_path"] = self._save_incident_snapshot(
+                            snapshot, alert["behavior"], alert["track_id"], alert["severity"])
                         self.root.after(0, self._play_alert_sound)
 
                     self.root.after(0, self._fire_behavior_alert, "cam", alert)
 
+                self.root.after(0, self._update_camera_inline_status)
                 self.root.after(0, self._show_frame, annotated, self.cam_canvas)
                 time.sleep(0.03)  # ~30 fps cap
 
@@ -1301,9 +1649,22 @@ class SentinelApp:
 
     def _camera_stopped(self):
         self.camera_running = False
+        if "active" in self.camera_source_status.lower():
+            self.camera_source_status = "Disconnected"
+        self._update_camera_inline_status()
         self.btn_cam_start.config(state="normal")
         self.btn_cam_stop.config(state="disabled")
         self._set_status("IDLE", ACCENT)
+
+    def _update_camera_inline_status(self):
+        if hasattr(self, "cam_status_inline"):
+            color = ACCENT if self.camera_running and "active" in self.camera_source_status.lower() else (
+                DANGER if "failed" in self.camera_source_status.lower() or "unavailable" in self.camera_source_status.lower()
+                or "disconnected" in self.camera_source_status.lower() else WARNING
+            )
+            self.cam_status_inline.config(text=self.camera_source_status, fg=color)
+        if hasattr(self, "cam_fps_inline"):
+            self.cam_fps_inline.config(text=f"{self.cam_processing_fps:.1f} FPS")
 
     # ═════════════════════════════════════════════════════════════════════════
     # SHARED DISPLAY HELPERS
@@ -1340,10 +1701,10 @@ class SentinelApp:
         except (tk.TclError, Exception):
             pass
 
-    def _update_conf_histogram(self, bag_dets, person_dets, hist_ax, hist_canvas, conf_history):
+    def _update_conf_histogram(self, person_dets, hist_ax, hist_canvas, conf_history):
         """Update the confidence histogram with latest detections."""
         try:
-            new_confs = [d[4] for d in bag_dets] + [d[4] for d in person_dets]
+            new_confs = [d[4] for d in person_dets]
             conf_history.extend(new_confs)
             if len(conf_history) > 150:
                 del conf_history[:-150]
@@ -1409,7 +1770,8 @@ class SentinelApp:
                 dwell = int(info.get("dwell_time", 0))
                 meander = float(info.get("meander_ratio", 1.0))
                 revisits = int(info.get("revisit_count", 0))
-                zone_str = "RESTRICTED" if info.get("in_restricted_zone") else "CLEAR"
+                posture = info.get("posture", "UNKNOWN")
+                pose_conf = int(info.get("pose_confidence", 0.0) * 100)
                 b_state = str(info.get("behavior_state", "NORMAL"))
                 behaviour_label = {
                     "ALERT": "SUSPICIOUS",
@@ -1418,18 +1780,12 @@ class SentinelApp:
                     "COOLING_DOWN": "COOLING",
                 }.get(b_state, b_state)
                 targets_text += (
-                    f"PERSON #{track_id}\n"
-                    f"  Dwell: {dwell}s | Meander: {meander:.1f}\n"
-                    f"  Revisits: {revisits} | Zone: {zone_str}\n"
+                    f"PERSON #{track_id} | Posture: {posture} ({pose_conf}%)\n"
+                    f"  Dwell: {dwell}s | Meander: {meander:.1f} | Revisits: {revisits}\n"
                     f"  Behaviour: {behaviour_label} | Risk: {severity}\n"
                 )
             else:
-                status = "NORMAL"
-                if info.get("owner_returned"):
-                    status = "OWNER RETURNED"
-                elif threats:
-                    status = ", ".join(sorted(threats))
-                targets_text += f"LUGGAGE #{track_id} - {status} | Risk: {severity}\n"
+                continue
             
             # Keep track of global maximum risk severity
             if risk_score > max_risk_score:
@@ -1455,10 +1811,153 @@ class SentinelApp:
         # Update HUD risk gauge panel
         risk_lbl.config(text=f"{global_severity} ({max_risk_score}%)", fg=hex_color)
 
+    def _format_seconds(self, seconds):
+        seconds = max(0, int(seconds or 0))
+        return f"{seconds // 60:02d}:{seconds % 60:02d}"
+
+    def _severity_color(self, severity):
+        return {
+            "LOW": ACCENT,
+            "MEDIUM": WARNING,
+            "HIGH": WARNING,
+            "CRITICAL": DANGER,
+        }.get(str(severity).upper(), TEXT)
+
+    def _incident_summary(self, alert):
+        behavior = alert.get("behavior", "EVENT")
+        evidence = alert.get("evidence") or {}
+        if behavior == "POSSIBLE_FALL":
+            return (
+                f"Possible fall, not confirmed fall. Posture={evidence.get('posture', 'LYING_DOWN')}, "
+                f"pose confidence={float(evidence.get('pose_confidence', 0.0)):.2f}"
+            )
+        if behavior in ("LOITERING", "SUSPICIOUS_LOITERING", "LONG_DWELL", "REPEATED_MOVEMENT"):
+            return (
+                "Behavioural risk evidence: "
+                f"dwell={evidence.get('dwell_time', '?')}s, "
+                f"meander={evidence.get('meander_ratio', '?')}, "
+                f"revisits={evidence.get('revisit_count', '?')}. "
+                "This is a risk signal, not a criminality probability."
+            )
+        return str(alert.get("description") or alert.get("event_name") or behavior)
+
+    def _record_incident(self, stream_type, alert, alert_msg):
+        category = alert.get("behavior", "EVENT")
+        severity = alert.get("severity", "LOW")
+        track_id = alert.get("track_id", "?")
+        class_name = alert.get("class_name", "object")
+        incident = {
+            "id": len(self.incidents) + 1,
+            "time": time.strftime("%H:%M:%S"),
+            "date": time.strftime("%Y-%m-%d"),
+            "source": "Live" if stream_type == "cam" else "Video",
+            "category": category,
+            "severity": severity,
+            "track_id": track_id,
+            "class_name": class_name,
+            "object_label": f"{class_name.upper()}#{track_id}",
+            "summary": self._incident_summary(alert),
+            "message": alert_msg.strip(),
+            "snapshot_path": alert.get("snapshot_path"),
+            "acknowledged": False,
+            "dismissed": False,
+        }
+        self.incidents.append(incident)
+        self.unread_incidents += 1
+        self._update_incident_badges()
+        self._refresh_incidents_view()
+        return incident
+
+    def _update_incident_badges(self):
+        if hasattr(self, "nav_incident_badge"):
+            suffix = "incident" if self.unread_incidents == 1 else "incidents"
+            self.nav_incident_badge.config(
+                text=f"{self.unread_incidents} new {suffix}",
+                fg=DANGER if self.unread_incidents else MUTED
+            )
+
+    def _refresh_incidents_view(self):
+        if not hasattr(self, "incident_tree"):
+            return
+        category_filter = self.incident_category_filter.get()
+        severity_filter = self.incident_severity_filter.get()
+
+        categories = ["All"] + sorted({i["category"] for i in self.incidents})
+        try:
+            self.incident_category_combo.config(values=categories)
+        except Exception:
+            pass
+
+        self.incident_tree.delete(*self.incident_tree.get_children())
+        for incident in reversed(self.incidents):
+            if category_filter != "All" and incident["category"] != category_filter:
+                continue
+            if severity_filter != "All" and incident["severity"] != severity_filter:
+                continue
+            status = "Dismissed" if incident["dismissed"] else ("Acknowledged" if incident["acknowledged"] else "New")
+            self.incident_tree.insert(
+                "", "end", iid=str(incident["id"]),
+                values=(
+                    incident["time"], incident["source"], incident["category"],
+                    incident["severity"], incident["object_label"], status, incident["summary"]
+                )
+            )
+        self._show_selected_incident_details()
+
+    def _selected_incident(self):
+        if not hasattr(self, "incident_tree"):
+            return None
+        selected = self.incident_tree.selection()
+        if not selected:
+            return None
+        inc_id = int(selected[0])
+        return next((i for i in self.incidents if i["id"] == inc_id), None)
+
+    def _show_selected_incident_details(self):
+        if not hasattr(self, "incident_details"):
+            return
+        incident = self._selected_incident()
+        if not incident:
+            self._set_text(self.incident_details, "Select an incident to inspect details.")
+            return
+        details = (
+            f"{incident['date']} {incident['time']} | {incident['source']} | {incident['severity']}\n"
+            f"Target: {incident['object_label']} | Category: {incident['category']}\n"
+            f"Evidence: {incident['summary']}\n"
+            f"Snapshot: {incident.get('snapshot_path') or 'Not saved for this event'}"
+        )
+        self._set_text(self.incident_details, details)
+
+    def _ack_selected_incident(self):
+        incident = self._selected_incident()
+        if not incident:
+            return
+        incident["acknowledged"] = True
+        self._stop_alert_sound()
+        self._refresh_incidents_view()
+
+    def _dismiss_selected_incident(self):
+        incident = self._selected_incident()
+        if not incident:
+            return
+        incident["dismissed"] = True
+        incident["acknowledged"] = True
+        self._dismiss_target_alert(incident["class_name"], incident["track_id"])
+        self._stop_alert_sound()
+        self._refresh_incidents_view()
+
+    def _dismiss_target_alert(self, alert_type, target_id):
+        for ents in [getattr(self, "vid_tracked_entities", {}),
+                     getattr(self, "cam_tracked_entities", {})]:
+            for _key, info in ents.items():
+                if info.get("class_name") == alert_type and info.get("track_id") == target_id:
+                    info["alert_dismissed"] = True
+                    info.setdefault("active_threats", set()).clear()
+
     def _fire_behavior_alert(self, stream_type, alert):
         """
-        Log alerts in log widgets, update statistics counters, and pop up Acknowledge window
-        for HIGH/CRITICAL threat events.
+        Log alerts in dashboard widgets, update statistics counters, and record a
+        non-modal incident entry for review and acknowledgement.
         """
         ts = time.strftime("%H:%M:%S")
         behavior = alert["behavior"]
@@ -1474,13 +1973,10 @@ class SentinelApp:
                 f"Meander={evidence.get('meander_ratio', '?')}, "
                 f"Revisits={evidence.get('revisit_count', '?')}]"
             )
-        if behavior == "RESTRICTED_ZONE":
-            alert_msg = f"[{ts}] ⚠ {class_name.upper()} #{track_id} — RESTRICTED ZONE ENTRY ({severity}){evidence_note}\n"
+        if behavior == "POSSIBLE_FALL":
+            alert_msg = f"[{ts}] ⚠ {class_name.upper()} #{track_id} — POSSIBLE FALL DETECTED ({severity}) [Posture=LYING_DOWN]\n"
         elif behavior in ("LOITERING", "SUSPICIOUS_LOITERING"):
             alert_msg = f"[{ts}] ⚠ {class_name.upper()} #{track_id} — SUSPICIOUS LOITERING ({severity}){evidence_note}\n"
-        elif behavior == "UNATTENDED_OBJECT":
-            bag_label = "CRITICAL BAGGAGE" if severity == "CRITICAL" else "UNATTENDED BAGGAGE"
-            alert_msg = f"[{ts}] 🚨 {class_name.upper()} #{track_id} — {bag_label} ({severity})\n"
         elif behavior == "REPEATED_MOVEMENT":
             alert_msg = f"[{ts}] ⚠ {class_name.upper()} #{track_id} — REPEATED MOVEMENT ({severity}){evidence_note}\n"
         elif behavior == "LONG_DWELL":
@@ -1500,13 +1996,7 @@ class SentinelApp:
 
         # Update stats
         self._update_alert_stats(behavior.lower(), f"{class_name.upper()}#{track_id}", severity)
-
-        # Trigger popup acknowledgement window for HIGH and CRITICAL alerts
-        if severity in ("HIGH", "CRITICAL"):
-            popup_title = alert.get("description") or f"{event_name} DETECTED"
-            self.root.after(0, self._show_dismiss_popup,
-                            f"{popup_title}\nTarget: {class_name.upper()} #{track_id}\nSeverity: {severity}",
-                            class_name, track_id)
+        self._record_incident(stream_type, alert, alert_msg)
 
     def _write_log(self, log_widget, msg):
         log_widget.config(state="normal")
@@ -1546,44 +2036,9 @@ class SentinelApp:
         self._alert_sound_active = False
         self._alert_sound_thread = None
 
-    def _show_dismiss_popup(self, message, alert_type, target_id):
-        popup = tk.Toplevel(self.root)
-        popup.title("⚠ SENTINEL ALERT")
-        popup.geometry("500x220")
-        popup.configure(bg=CARD)
-        popup.grab_set()
-        popup.resizable(False, False)
-
-        tk.Label(popup, text="⚠ ALERT TRIGGERED", font=("Consolas", 14, "bold"),
-                 fg=DANGER, bg=CARD).pack(pady=(20, 5))
-        tk.Label(popup, text=message, font=("Consolas", 12),
-                 fg=TEXT, bg=CARD, justify="center").pack(pady=5)
-        tk.Label(popup, text="Assign an officer to investigate immediately.",
-                 font=("Consolas", 10), fg=MUTED, bg=CARD).pack(pady=5)
-
-        def dismiss():
-            self._stop_alert_sound()
-            
-            # Dismiss alert inside unified tracked entities dictionaries
-            vid_ents = getattr(self, "vid_tracked_entities", {})
-            cam_ents = getattr(self, "cam_tracked_entities", {})
-            
-            for ents in [vid_ents, cam_ents]:
-                for key, info in ents.items():
-                    if info["class_name"] == alert_type and info["track_id"] == target_id:
-                        info["alert_dismissed"] = True
-                        info["active_threats"].clear()
-                        
-            popup.destroy()
-
-        tk.Button(popup, text="✓ ACKNOWLEDGED — DISMISS ALERT",
-                  font=("Consolas", 11, "bold"), bg=ACCENT, fg=BG,
-                  relief="flat", cursor="hand2", padx=20, pady=8,
-                  command=dismiss).pack(pady=15)
-
     def _save_incident_snapshot(self, frame, behavior, track_id, severity):
         if frame is None or not hasattr(frame, "shape") or frame.size == 0:
-            return
+            return None
         incidents_dir = os.path.join(BASE_DIR, "incidents")
         os.makedirs(incidents_dir, exist_ok=True)
         ts = time.strftime("%Y%m%d_%H%M%S")
@@ -1599,18 +2054,19 @@ class SentinelApp:
             success = cv2.imwrite(filepath, snapshot)
             if not success:
                 print(f"[WARN] cv2.imwrite failed for {filepath}")
+                return None
+            return filepath
         except Exception as e:
             print(f"[ERROR] Snapshot save failed: {e}")
+        return None
 
     def _build_stats_tab(self):
         self.stats_vars = {
-            "total_bags": tk.IntVar(value=0),
             "total_persons": tk.IntVar(value=0),
-            "total_alerts": tk.IntVar(value=0),       # Unattended Objects
             "total_loiters": tk.IntVar(value=0),      # Loitering
             "total_running": tk.IntVar(value=0),      # Rapid Movement
             "total_pacing": tk.IntVar(value=0),       # Repeated Movement
-            "total_zone_entries": tk.IntVar(value=0), # Restricted Zone Violations
+            "total_falls": tk.IntVar(value=0),        # Possible Fall Events
             "session_start": time.time(),
         }
         self.alert_history = []  # log of alert events
@@ -1634,13 +2090,11 @@ class SentinelApp:
         cards.pack(fill="x", padx=10, pady=10)
         
         stat_items = [
-            ("BAGS DETECTED", "total_bags", ACCENT),
             ("PERSONS TRACKED", "total_persons", "#44aaff"),
-            ("UNATTENDED BAGS", "total_alerts", DANGER),
             ("LOITERING ALERTS", "total_loiters", WARNING),
             ("RAPID MOVEMENT", "total_running", WARNING),
             ("REPEATED PACING", "total_pacing", WARNING),
-            ("ZONE VIOLATIONS", "total_zone_entries", DANGER),
+            ("POSSIBLE FALLS", "total_falls", WARNING),
         ]
         
         # Grid layout with 4 columns
@@ -1667,35 +2121,21 @@ class SentinelApp:
         vid_ents = getattr(self, "vid_tracked_entities", {})
         cam_ents = getattr(self, "cam_tracked_entities", {})
         
-        bags = sum(1 for e in vid_ents.values() if e["class_name"] != "person") + \
-               sum(1 for e in cam_ents.values() if e["class_name"] != "person")
         persons = sum(1 for e in vid_ents.values() if e["class_name"] == "person") + \
                   sum(1 for e in cam_ents.values() if e["class_name"] == "person")
                   
-        self.stats_vars["total_bags"].set(bags)
         self.stats_vars["total_persons"].set(persons)
-
-    def _on_owner_returned(self, bag_id):
-        self._stop_alert_sound()
-        ts = time.strftime("%H:%M:%S")
-        msg = f"[{ts}] ✓ BAG #{bag_id} — OWNER RETURNED, alert cancelled\n"
-        for log in [getattr(self, 'vid_alert_log', None),
-                    getattr(self, 'cam_alert_log', None)]:
-            if log:
-                self._write_log(log, msg)
 
     def _update_alert_stats(self, alert_type, alert_id, severity=""):
         # Increment behavior counts
-        if "unattended_object" in alert_type:
-            self.stats_vars["total_alerts"].set(self.stats_vars["total_alerts"].get() + 1)
-        elif "loiter" in alert_type:
+        if "loiter" in alert_type:
             self.stats_vars["total_loiters"].set(self.stats_vars["total_loiters"].get() + 1)
         elif "running" in alert_type:
             self.stats_vars["total_running"].set(self.stats_vars["total_running"].get() + 1)
         elif "pacing" in alert_type or "movement" in alert_type:
             self.stats_vars["total_pacing"].set(self.stats_vars["total_pacing"].get() + 1)
-        elif "restricted" in alert_type or "zone" in alert_type:
-            self.stats_vars["total_zone_entries"].set(self.stats_vars["total_zone_entries"].get() + 1)
+        elif "fall" in alert_type:
+            self.stats_vars["total_falls"].set(self.stats_vars["total_falls"].get() + 1)
 
         ts = time.strftime("%H:%M:%S")
         entry = f"[{ts}] {alert_type.upper()} on {alert_id} | SEVERITY: {severity}\n"
@@ -1712,7 +2152,6 @@ class SentinelApp:
             from reportlab.lib import colors
             from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
             from reportlab.lib.styles import getSampleStyleSheet
-            import glob
 
             save_path = filedialog.asksaveasfilename(
                 defaultextension=".pdf",
@@ -1734,13 +2173,11 @@ class SentinelApp:
             summary_data = [
                 ["Metric / Behavior", "Value"],
                 ["Session Duration", f"{duration // 60}m {duration % 60}s"],
-                ["Bags Tracked", str(self.stats_vars["total_bags"].get())],
                 ["Persons Tracked", str(self.stats_vars["total_persons"].get())],
-                ["Unattended Objects Fired", str(self.stats_vars["total_alerts"].get())],
                 ["Loitering Incidents", str(self.stats_vars["total_loiters"].get())],
                 ["Rapid Movement Detections", str(self.stats_vars["total_running"].get())],
                 ["Repeated Pacing Incidents", str(self.stats_vars["total_pacing"].get())],
-                ["Restricted Zone Crossings", str(self.stats_vars["total_zone_entries"].get())],
+                ["Possible Falls Detected", str(self.stats_vars["total_falls"].get())],
             ]
             t = Table(summary_data, colWidths=[250, 200])
             t.setStyle(TableStyle([
@@ -1757,16 +2194,23 @@ class SentinelApp:
             for entry in self.alert_history:
                 story.append(Paragraph(entry.strip(), styles["Normal"]))
 
-            incidents_dir = os.path.join(BASE_DIR, "incidents")
-            snapshots = glob.glob(os.path.join(incidents_dir, "*.jpg"))
+            snapshots = [
+                incident.get("snapshot_path")
+                for incident in self.incidents
+                if incident.get("snapshot_path")
+            ]
             if snapshots:
                 story.append(Spacer(1, 20))
-                story.append(Paragraph(f"Incident Snapshots: {len(snapshots)} saved to incidents/ folder", styles["Normal"]))
+                story.append(Paragraph(f"Session Incident Snapshots: {len(snapshots)} saved for this run", styles["Normal"]))
 
             doc.build(story)
-            messagebox.showinfo("Export Complete", f"Report saved to:\n{save_path}")
+            self._set_status(f"REPORT EXPORTED: {save_path}", ACCENT)
+            if hasattr(self, "stats_log"):
+                self._write_log(self.stats_log, f"Report exported: {save_path}\n")
         except Exception as e:
-            messagebox.showerror("Export Failed", str(e))
+            self._set_status(f"EXPORT FAILED: {e}", DANGER)
+            if hasattr(self, "stats_log"):
+                self._write_log(self.stats_log, f"Export failed: {e}\n")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

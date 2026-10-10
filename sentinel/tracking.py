@@ -1,17 +1,12 @@
 """
-SENTINEL AI — Multi-Object Tracker Module
-Maintains isolated, class-aware multi-object tracking for persons and luggage items.
-Enforces:
-- Strict isolation: A person detection NEVER becomes a luggage track, and vice-versa.
-- Persistent tracking IDs (PERSON-1, PERSON-2, LUGGAGE-1, LUGGAGE-2).
-- EMA bounding box smoothing and image-plane velocity tracking.
-- Bounded trajectory histories with grid-cell visit tracking for behavioral analysis.
+SENTINEL AI - Person tracker.
+Maintains persistent PERSON IDs, smoothed boxes, velocity, and trajectory history.
 """
 
 import time
 import math
 from sentinel.config import SentinelConfig
-from sentinel.detection import get_object_group, is_person, is_bag_object
+from sentinel.detection import get_object_group, is_person
 
 
 class TrackStatus:
@@ -32,7 +27,7 @@ class TrackState(dict):
         super().__init__()
         self["track_id"] = int(track_id)
         self["class_name"] = str(class_name)
-        self["object_type"] = "PERSON" if is_person(class_name) else "LUGGAGE"
+        self["object_type"] = "PERSON" if is_person(class_name) else "OTHER"
         self["bbox"] = tuple(int(v) for v in bbox)
         self["raw_bbox"] = tuple(int(v) for v in kwargs.get("raw_bbox", bbox))
         self["smoothed_bbox"] = tuple(int(v) for v in kwargs.get("smoothed_bbox", bbox))
@@ -78,15 +73,19 @@ class TrackState(dict):
         self["last_proximity_time"] = float(kwargs.get("last_proximity_time", now))
         self["direction_reversals"] = list(kwargs.get("direction_reversals", []))
         self["consecutive_running_frames"] = int(kwargs.get("consecutive_running_frames", 0))
-        self["consecutive_restricted_frames"] = int(kwargs.get("consecutive_restricted_frames", 0))
+
+        # Human Posture Estimation Properties
+        self["posture"] = str(kwargs.get("posture", "UNKNOWN"))
+        self["pose_confidence"] = float(kwargs.get("pose_confidence", 0.0))
+        self["keypoints"] = kwargs.get("keypoints", None)
+        self["consecutive_fall_frames"] = int(kwargs.get("consecutive_fall_frames", 0))
+        self["last_fall_alert_time"] = float(kwargs.get("last_fall_alert_time", 0.0))
 
         # Phase 4 & Suspicious Behavior Analysis Properties
         self["meander_ratio"] = float(kwargs.get("meander_ratio", 1.0))
         self["revisit_count"] = int(kwargs.get("revisit_count", 0))
         self["visited_cells"] = list(kwargs.get("visited_cells", []))
         self["last_grid_cell"] = kwargs.get("last_grid_cell", None)
-        self["owner_returned"] = bool(kwargs.get("owner_returned", False))
-        self["owner_return_time"] = kwargs.get("owner_return_time", None)
         self["suspicion_score"] = int(kwargs.get("suspicion_score", 0))
         self["suspicion_level"] = str(kwargs.get("suspicion_level", "NORMAL"))
         self["behavior_state"] = str(kwargs.get("behavior_state", "NORMAL"))
@@ -95,7 +94,6 @@ class TrackState(dict):
         self["cooldown_frames"] = int(kwargs.get("cooldown_frames", 0))
         self["path_length"] = float(kwargs.get("path_length", 0.0))
         self["net_displacement"] = float(kwargs.get("net_displacement", 0.0))
-        self["in_restricted_zone"] = bool(kwargs.get("in_restricted_zone", False))
 
         for k, v in kwargs.items():
             if k not in self:
@@ -139,12 +137,7 @@ class TrackState(dict):
 
 def match_entities(detections, tracked_entities, threshold=None, max_missing_sec=None, current_time=None):
     """
-    Class-aware multi-object centroid tracker.
-    Guarantees:
-    - Persons are strictly matched against person tracks.
-    - Luggage items are strictly matched against luggage tracks.
-    - Person tracks and Luggage tracks operate in independent namespaces.
-    - Supports explicit current_time for deterministic video-time evaluation.
+    Person-only centroid tracker with explicit current_time support for video-time evaluation.
     """
     if threshold is None:
         threshold = getattr(SentinelConfig, "TRACK_MATCH_THRESHOLD", 100.0)
@@ -163,18 +156,22 @@ def match_entities(detections, tracked_entities, threshold=None, max_missing_sec
     matched_keys = set()
     matched_det_indices = set()
 
-    # Organize detections strictly by semantic group (PERSON or BAG_OBJECT)
+    # Organize detections strictly by semantic group.
     dets_by_group = {}
     for idx, det in enumerate(detections):
-        cls_name = det[5] if len(det) > 5 else "luggage"
+        cls_name = det[5] if len(det) > 5 else "person"
         group = get_object_group(cls_name)
+        if group != "PERSON":
+            continue
         dets_by_group.setdefault(group, []).append((idx, det))
 
     # Organize existing tracks strictly by semantic group
     tracks_by_group = {}
     for key, info in tracked_entities.items():
-        cls_name = info.get("class_name", "luggage")
+        cls_name = info.get("class_name", "person")
         group = get_object_group(cls_name)
+        if group != "PERSON":
+            continue
         tracks_by_group.setdefault(group, []).append((key, info))
 
     all_groups = set(dets_by_group.keys()) | set(tracks_by_group.keys())
@@ -273,13 +270,15 @@ def match_entities(detections, tracked_entities, threshold=None, max_missing_sec
                 last_proximity_time=t_info.get("last_proximity_time", current_time),
                 direction_reversals=t_info.get("direction_reversals", []),
                 consecutive_running_frames=t_info.get("consecutive_running_frames", 0),
-                consecutive_restricted_frames=t_info.get("consecutive_restricted_frames", 0),
+                posture=t_info.get("posture", "UNKNOWN"),
+                pose_confidence=t_info.get("pose_confidence", 0.0),
+                keypoints=t_info.get("keypoints", None),
+                consecutive_fall_frames=t_info.get("consecutive_fall_frames", 0),
+                last_fall_alert_time=t_info.get("last_fall_alert_time", 0.0),
                 meander_ratio=t_info.get("meander_ratio", 1.0),
                 revisit_count=t_info.get("revisit_count", 0),
                 visited_cells=t_info.get("visited_cells", []),
                 last_grid_cell=t_info.get("last_grid_cell", None),
-                owner_returned=t_info.get("owner_returned", False),
-                owner_return_time=t_info.get("owner_return_time", None),
                 suspicion_score=t_info.get("suspicion_score", 0),
                 suspicion_level=t_info.get("suspicion_level", "NORMAL"),
                 behavior_state=t_info.get("behavior_state", "NORMAL"),
@@ -287,8 +286,7 @@ def match_entities(detections, tracked_entities, threshold=None, max_missing_sec
                 sustained_suspicious_frames=t_info.get("sustained_suspicious_frames", 0),
                 cooldown_frames=t_info.get("cooldown_frames", 0),
                 path_length=t_info.get("path_length", 0.0),
-                net_displacement=t_info.get("net_displacement", 0.0),
-                in_restricted_zone=t_info.get("in_restricted_zone", False)
+                net_displacement=t_info.get("net_displacement", 0.0)
             )
             new_tracked[t_key] = updated_track
 
@@ -379,13 +377,15 @@ def match_entities(detections, tracked_entities, threshold=None, max_missing_sec
                 last_proximity_time=info.get("last_proximity_time", current_time),
                 direction_reversals=info.get("direction_reversals", []),
                 consecutive_running_frames=info.get("consecutive_running_frames", 0),
-                consecutive_restricted_frames=info.get("consecutive_restricted_frames", 0),
+                posture=info.get("posture", "UNKNOWN"),
+                pose_confidence=info.get("pose_confidence", 0.0),
+                keypoints=info.get("keypoints", None),
+                consecutive_fall_frames=info.get("consecutive_fall_frames", 0),
+                last_fall_alert_time=info.get("last_fall_alert_time", 0.0),
                 meander_ratio=info.get("meander_ratio", 1.0),
                 revisit_count=info.get("revisit_count", 0),
                 visited_cells=info.get("visited_cells", []),
                 last_grid_cell=info.get("last_grid_cell", None),
-                owner_returned=info.get("owner_returned", False),
-                owner_return_time=info.get("owner_return_time", None),
                 suspicion_score=info.get("suspicion_score", 0),
                 suspicion_level=info.get("suspicion_level", "NORMAL"),
                 behavior_state=info.get("behavior_state", "NORMAL"),
@@ -393,59 +393,11 @@ def match_entities(detections, tracked_entities, threshold=None, max_missing_sec
                 sustained_suspicious_frames=info.get("sustained_suspicious_frames", 0),
                 cooldown_frames=info.get("cooldown_frames", 0),
                 path_length=info.get("path_length", 0.0),
-                net_displacement=info.get("net_displacement", 0.0),
-                in_restricted_zone=info.get("in_restricted_zone", False)
+                net_displacement=info.get("net_displacement", 0.0)
             )
             new_tracked[key] = kept_track
 
     return new_tracked
-
-
-# Backward compatibility wrappers
-def match_bag_centroids(detections, tracked_bags, threshold=80, max_missing_sec=3.0):
-    formatted_dets = []
-    for d in detections:
-        if len(d) == 5:
-            formatted_dets.append((d[0], d[1], d[2], d[3], d[4], "luggage"))
-        else:
-            formatted_dets.append(d)
-
-    unified = {}
-    for bid, info in tracked_bags.items():
-        key = f"BAG_OBJECT_{bid}"
-        unified[key] = {
-            "track_id": bid,
-            "class_name": "luggage",
-            "confidence": info.get("conf", 0.8),
-            "bbox": info["bbox"],
-            "centroid": ((info["bbox"][0]+info["bbox"][2])/2.0, (info["bbox"][1]+info["bbox"][3])/2.0),
-            "first_seen": info["first_seen"],
-            "last_seen": info["last_seen"],
-            "active_threats": {"UNATTENDED_OBJECT"} if info.get("is_alerted") else set(),
-            "alert_dismissed": info.get("alert_dismissed", False),
-            "risk_score": info.get("risk_score", 0),
-            "stationary_start": info["first_seen"] if info.get("is_alerted") else None,
-            "last_proximity_time": info.get("owner_returned_at") or info["first_seen"],
-            "return_msg_frames": info.get("return_msg_frames", 0)
-        }
-
-    res = match_entities(formatted_dets, unified, threshold, max_missing_sec)
-
-    output = {}
-    for key, val in res.items():
-        bid = val["track_id"]
-        output[bid] = {
-            "bbox": val["bbox"],
-            "conf": val["confidence"],
-            "first_seen": val["first_seen"],
-            "last_seen": val["last_seen"],
-            "is_alerted": "UNATTENDED_OBJECT" in val["active_threats"],
-            "alert_dismissed": val["alert_dismissed"],
-            "risk_score": val["risk_score"],
-            "owner_returned_at": val.get("last_proximity_time"),
-            "return_msg_frames": val.get("return_msg_frames", 0)
-        }
-    return output
 
 
 def match_person_centroids(detections, tracked_persons, threshold=100, max_missing_sec=3.0):

@@ -22,7 +22,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from sentinel.config import SentinelConfig
-from sentinel.detection import detect_persons, load_dual_models
+from sentinel.detection import detect_persons, load_person_model
 from sentinel.tracking import match_entities
 from sentinel.behavior import evaluate_person_behavior
 from sentinel.risk import analyze_behaviors
@@ -235,7 +235,7 @@ def main():
         return 0
 
     base_dir = BASE_DIR
-    bag_model, person_model, status = load_dual_models(base_dir)
+    person_model, status = load_person_model(base_dir)
     if person_model is None:
         print("Person detection model did not load; evaluation cannot proceed.")
         return 1

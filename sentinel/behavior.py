@@ -4,7 +4,6 @@ Implements true trajectory-based human behavior analysis:
 - Dwell Time Analysis (Tdwell >= 45s baseline signal, never suspicious alone)
 - Trajectory & Meander Ratio Analysis (rho = Path Length / Net Displacement with windowing)
 - Spatial Grid Revisit Analysis (N x M spatial grid cell returns)
-- Restricted Zone Event Separation (zone violation distinct from personal loitering)
 - Multi-Signal Explainable Suspicion Scoring (transparent, explainable evidence breakdown)
 - Temporal Stability & Hysteresis State Machine (NORMAL -> OBSERVING -> LOW -> MEDIUM -> HIGH -> ALERT / COOLING DOWN)
 """
@@ -14,7 +13,7 @@ import time
 import cv2
 import numpy as np
 from sentinel.config import SentinelConfig
-from sentinel.detection import is_person, is_bag_object
+from sentinel.detection import is_person
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -191,7 +190,6 @@ def evaluate_person_behavior(p_info, w, h, current_time=None):
       Signal A: Dwell time
       Signal B: Trajectory / Meander ratio
       Signal C: Spatial revisits
-      Signal D: Restricted zone entry
     - Computes an explainable suspicion score (0-100) and evidence breakdown.
     - Uses temporal stability / hysteresis to prevent single-frame flickering alerts.
     """
@@ -237,26 +235,6 @@ def evaluate_person_behavior(p_info, w, h, current_time=None):
     # A meander flag requires non-trivial movement so stationary standing doesn't trigger it
     meander_flag = (meander_ratio >= meander_thresh) and (path_len >= min_path)
 
-    # ── Signal D: Restricted Surveillance Zone ──
-    inside_zone = False
-    if getattr(SentinelConfig, "RESTRICTED_ZONE_ENABLED", True):
-        poly_pts = np.array([
-            [int(pt[0] * w), int(pt[1] * h)] for pt in SentinelConfig.RESTRICTED_ZONE_COORDS
-        ], dtype=np.int32)
-        dist_to_poly = cv2.pointPolygonTest(poly_pts, (pcx, pcy), False)
-        if dist_to_poly >= 0:
-            inside_zone = True
-
-    p_info["in_restricted_zone"] = inside_zone
-    min_zone_frames = getattr(SentinelConfig, "RESTRICTED_ZONE_MIN_FRAMES", 15)
-
-    if inside_zone:
-        p_info["consecutive_restricted_frames"] = p_info.get("consecutive_restricted_frames", 0) + 1
-        restricted_flag = p_info["consecutive_restricted_frames"] >= min_zone_frames
-    else:
-        p_info["consecutive_restricted_frames"] = 0
-        restricted_flag = False
-
     # ── Behavioral Combinations ──
     reversals = count_direction_reversals(history)
     p_info["direction_reversals_count"] = reversals
@@ -272,10 +250,9 @@ def evaluate_person_behavior(p_info, w, h, current_time=None):
     is_loitering = dwell_flag and is_repetitive
 
     # ── Multi-Signal Explainable Suspicion Score (0-100) ──
-    w_dwell = getattr(SentinelConfig, "WEIGHT_DWELL", 25)
-    w_meander = getattr(SentinelConfig, "WEIGHT_MEANDER", 30)
-    w_revisit = getattr(SentinelConfig, "WEIGHT_REVISIT", 25)
-    w_restricted = getattr(SentinelConfig, "WEIGHT_RESTRICTED", 20)
+    w_dwell = getattr(SentinelConfig, "WEIGHT_DWELL", 35)
+    w_meander = getattr(SentinelConfig, "WEIGHT_MEANDER", 35)
+    w_revisit = getattr(SentinelConfig, "WEIGHT_REVISIT", 30)
 
     score = 0.0
 
@@ -298,15 +275,12 @@ def evaluate_person_behavior(p_info, w, h, current_time=None):
     elif revisit_count > 0:
         score += w_revisit * 0.30 * (revisit_count / max(1, revisit_thresh))
 
-    # 4. Restricted zone contribution:
-    if restricted_flag:
-        score += w_restricted
-
     suspicion_score = int(min(100, max(0, round(score))))
     p_info["suspicion_score"] = suspicion_score
 
     # ── Target Level Determination ──
-    if is_loitering and restricted_flag:
+    crit_thresh = getattr(SentinelConfig, "SUSPICION_THRESH_CRITICAL", 85)
+    if is_loitering and (suspicion_score >= crit_thresh or (meander_flag and revisit_flag and dwell_time >= 55.0)):
         target_level = "CRITICAL"
     elif is_loitering:
         target_level = "HIGH"
@@ -315,9 +289,6 @@ def evaluate_person_behavior(p_info, w, h, current_time=None):
     elif dwell_flag and not is_repetitive:
         # Long dwell alone is ONLY observation / low, NEVER suspicious loitering!
         target_level = "OBSERVING"
-    elif restricted_flag and not is_repetitive and not dwell_flag:
-        # Restricted entry alone is a zone warning, not suspicious loitering
-        target_level = "LOW"
     else:
         target_level = "NORMAL"
 
@@ -375,7 +346,7 @@ def evaluate_person_behavior(p_info, w, h, current_time=None):
         and bool(prior_threats & {"SUSPICIOUS_LOITERING", "LOITERING"})
     )
     high_conf_confirmed = (
-        loiter_confirmed and restricted_flag and stable_state in ("ALERT", "CRITICAL", "COOLING_DOWN")
+        loiter_confirmed and stable_state == "CRITICAL"
     )
 
     # ── Evidence Breakdown (Fully Explainable) ──
@@ -384,8 +355,7 @@ def evaluate_person_behavior(p_info, w, h, current_time=None):
     evidence_strings = [
         f"Dwell: {int(dwell_time)}s",
         f"Meander ratio: {meander_ratio:.1f}",
-        f"Revisits: {revisit_count}",
-        f"Restricted zone: {'YES' if inside_zone else 'NO'}"
+        f"Revisits: {revisit_count}"
     ]
 
     p_info["suspicion_evidence"] = {
@@ -397,20 +367,12 @@ def evaluate_person_behavior(p_info, w, h, current_time=None):
         "meander_flag": meander_flag,
         "revisit_count": revisit_count,
         "revisit_flag": revisit_flag,
-        "inside_zone": inside_zone,
-        "restricted_flag": restricted_flag,
         "grid_cell": grid_label,
         "summary": evidence_strings
     }
 
     # ── Threat Set Management ──
-    # 1. Restricted zone entry
-    if restricted_flag:
-        p_info["active_threats"].add("RESTRICTED_ZONE")
-    else:
-        p_info["active_threats"].discard("RESTRICTED_ZONE")
-
-    # 2. Long dwell (warning only, if not loitering)
+    # 1. Long dwell (warning only, if not loitering)
     # Keep LONG_DWELL active once dwell threshold is reached, even if repetitive movement starts
     # This prevents flickering and allows LONG_DWELL + REPEATED_MOVEMENT to coexist
     if dwell_flag:
@@ -418,7 +380,7 @@ def evaluate_person_behavior(p_info, w, h, current_time=None):
     else:
         p_info["active_threats"].discard("LONG_DWELL")
 
-    # 3. Repeated movement (warning only, if dwell not yet reached)
+    # 2. Repeated movement (warning only, if dwell not yet reached)
     # Keep REPEATED_MOVEMENT active once repetitive behavior is detected
     # This allows it to coexist with LONG_DWELL and prevents flickering
     if is_repetitive:
@@ -426,7 +388,7 @@ def evaluate_person_behavior(p_info, w, h, current_time=None):
     else:
         p_info["active_threats"].discard("REPEATED_MOVEMENT")
 
-    # 4. Suspicious loitering — requires dwell + repetitive movement AND temporal persistence
+    # 3. Suspicious loitering — requires dwell + repetitive movement AND temporal persistence
     if loiter_confirmed:
         p_info["active_threats"].add("SUSPICIOUS_LOITERING")
         p_info["active_threats"].add("LOITERING")  # for backward compatibility
@@ -434,7 +396,7 @@ def evaluate_person_behavior(p_info, w, h, current_time=None):
         p_info["active_threats"].discard("SUSPICIOUS_LOITERING")
         p_info["active_threats"].discard("LOITERING")
 
-    # 5. Critical threat: persistent loitering inside restricted zone
+    # 4. Critical threat: persistent critical loitering
     if high_conf_confirmed:
         p_info["active_threats"].add("HIGH_CONFIDENCE_SUSPICIOUS")
     else:

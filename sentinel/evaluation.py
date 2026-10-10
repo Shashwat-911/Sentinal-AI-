@@ -11,8 +11,13 @@ from typing import Dict, Iterable, List, Sequence
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
-from sklearn.metrics import ConfusionMatrixDisplay
+
+try:
+    from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
+    from sklearn.metrics import ConfusionMatrixDisplay
+    HAS_SKLEARN = True
+except ImportError:
+    HAS_SKLEARN = False
 
 NORMAL = "NORMAL"
 SUSPICIOUS = "SUSPICIOUS"
@@ -50,11 +55,17 @@ def compute_confusion_counts(y_true, y_pred):
 
     true_arr = [t for t, _ in valid_entries]
     pred_arr = [p for _, p in valid_entries]
-    cm = confusion_matrix(true_arr, pred_arr, labels=LABELS)
-    if cm.shape != (2, 2):
+
+    if HAS_SKLEARN:
         cm = confusion_matrix(true_arr, pred_arr, labels=LABELS)
-    tn, fp, fn, tp = cm.ravel()
-    return int(tn), int(fp), int(fn), int(tp)
+        tn, fp, fn, tp = cm.ravel()
+        return int(tn), int(fp), int(fn), int(tp)
+    else:
+        tn = sum(1 for t, p in zip(true_arr, pred_arr) if t == NORMAL and p == NORMAL)
+        fp = sum(1 for t, p in zip(true_arr, pred_arr) if t == NORMAL and p == SUSPICIOUS)
+        fn = sum(1 for t, p in zip(true_arr, pred_arr) if t == SUSPICIOUS and p == NORMAL)
+        tp = sum(1 for t, p in zip(true_arr, pred_arr) if t == SUSPICIOUS and p == SUSPICIOUS)
+        return int(tn), int(fp), int(fn), int(tp)
 
 
 def compute_binary_metrics(y_true, y_pred):
@@ -82,10 +93,18 @@ def compute_binary_metrics(y_true, y_pred):
     pred_arr = [p for _, p in valid_entries]
     tn, fp, fn, tp = compute_confusion_counts(true_arr, pred_arr)
 
-    accuracy = accuracy_score(true_arr, pred_arr)
-    precision = precision_score(true_arr, pred_arr, pos_label=SUSPICIOUS, zero_division=0)
-    recall = recall_score(true_arr, pred_arr, pos_label=SUSPICIOUS, zero_division=0)
-    f1 = f1_score(true_arr, pred_arr, pos_label=SUSPICIOUS, zero_division=0)
+    if HAS_SKLEARN:
+        accuracy = accuracy_score(true_arr, pred_arr)
+        precision = precision_score(true_arr, pred_arr, pos_label=SUSPICIOUS, zero_division=0)
+        recall = recall_score(true_arr, pred_arr, pos_label=SUSPICIOUS, zero_division=0)
+        f1 = f1_score(true_arr, pred_arr, pos_label=SUSPICIOUS, zero_division=0)
+    else:
+        total = tn + fp + fn + tp
+        accuracy = (tp + tn) / total if total > 0 else 0.0
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
     specificity = 0.0 if (tn + fp) == 0 else tn / (tn + fp)
     false_positive_rate = 0.0 if (fp + tn) == 0 else fp / (fp + tn)
     false_negative_rate = 0.0 if (fn + tp) == 0 else fn / (fn + tp)

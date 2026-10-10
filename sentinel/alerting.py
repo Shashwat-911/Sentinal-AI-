@@ -1,22 +1,19 @@
 """
 SENTINEL AI — Alerting & HUD Visualization Module
-Renders cyber-HUD overlays with:
-- Strict visual distinction between PERSON and LUGGAGE
-- Clear behavioral indicators (dwell time, loitering, owner returned)
-- Cooldown-managed security alert dispatching.
+Renders person detection, posture, behavior, and incident overlays.
 """
 
 import time
 import cv2
 import numpy as np
 from sentinel.config import SentinelConfig
-from sentinel.detection import is_person, is_bag_object
+from sentinel.detection import is_person
 from sentinel.risk import calculate_entity_risk, analyze_behaviors
 
 
 def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
     """
-    Draw bounding boxes, threat overlays, and Restricted Zone.
+    Draw bounding boxes, posture skeletons, threat overlays, and Cyber-HUD.
     Returns (annotated_frame, list_of_new_alerts).
     
     Args:
@@ -31,22 +28,7 @@ def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
     # Run behavior and risk analysis
     analyze_behaviors(tracked_entities, w, h, current_time)
 
-    # 1. Draw Restricted Zone Polygon
-    if SentinelConfig.RESTRICTED_ZONE_ENABLED:
-        poly_pts = np.array([
-            [int(pt[0] * w), int(pt[1] * h)] for pt in SentinelConfig.RESTRICTED_ZONE_COORDS
-        ], dtype=np.int32)
-
-        zone_violated = any("RESTRICTED_ZONE" in info["active_threats"]
-                            for info in tracked_entities.values()
-                            if is_person(info["class_name"]))
-        zone_color = (0, 0, 255) if zone_violated else (255, 200, 0)
-
-        cv2.polylines(frame, [poly_pts], True, zone_color, 2)
-        cv2.putText(frame, "RESTRICTED SURVEILLANCE ZONE", (poly_pts[0][0] + 5, max(20, poly_pts[0][1] - 8)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, zone_color, 1)
-
-    # 2. Draw Bounding Boxes and Status Badges
+    # 1. Draw Bounding Boxes, Posture Skeletons, and Status Badges
     for key, info in tracked_entities.items():
         if info.get("alert_dismissed", False) or info.get("missed_frames", 0) > 5:
             continue
@@ -54,8 +36,14 @@ def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
         x1, y1, x2, y2 = info["bbox"]
         class_name = info["class_name"]
         track_id = info["track_id"]
-        conf = int(info["confidence"] * 100)
         is_human = is_person(class_name)
+        if not is_human:
+            continue
+
+        # Draw posture skeleton for persons when available
+        if is_human and info.get("keypoints") is not None:
+            from sentinel.posture import draw_pose_skeleton
+            draw_pose_skeleton(frame, info["keypoints"], info.get("posture", "UNKNOWN"))
 
         risk_score, severity, color = calculate_entity_risk(info, current_time)
         info["risk_score"] = risk_score
@@ -65,42 +53,32 @@ def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
         if severity == "CRITICAL" and (frame_count // 8) % 2 == 0:
             color = (255, 255, 255)
 
-        # Base box color by entity type if NORMAL
+        # Base box color for normal person tracks
         if severity == "NORMAL":
-            color = (0, 255, 136) if is_human else (255, 170, 0)
+            color = (0, 255, 136)
 
         # Draw main bounding box
         thickness = 3 if severity in ("HIGH", "CRITICAL") else 2
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
 
-        # Build clean HUD label
-        if is_human:
-            dwell = int(info.get("dwell_time", current_time - info.get("first_seen", current_time)))
-            meander = info.get("meander_ratio", 1.0)
-            revisits = info.get("revisit_count", 0)
-            in_zone = info.get("in_restricted_zone", False)
-            b_state = info.get("behavior_state", severity)
-            zone_str = "RESTRICTED" if in_zone else "NORMAL"
+        dwell = int(info.get("dwell_time", current_time - info.get("first_seen", current_time)))
+        meander = info.get("meander_ratio", 1.0)
+        revisits = info.get("revisit_count", 0)
+        posture = info.get("posture", "UNKNOWN")
+        pose_conf = int(info.get("pose_confidence", 0.0) * 100)
+        b_state = info.get("behavior_state", severity)
 
-            behaviour_label = {
-                "ALERT": "SUSPICIOUS",
-                "CRITICAL": "SUSPICIOUS",
-                "HIGH": "SUSPICIOUS",
-                "COOLING_DOWN": "COOLING",
-            }.get(str(b_state), str(b_state))
-            label = f"PERSON #{track_id} | {behaviour_label} | Risk: {severity}"
-            sub_label = (
-                f"Dwell: {dwell}s | Meander: {meander:.1f} | Revisits: {revisits} | "
-                f"Zone: {zone_str}"
-            )
-        else:
-            if info.get("owner_returned"):
-                label = f"LUGGAGE #{track_id} | OWNER RETURNED"
-                sub_label = None
-                color = (255, 255, 0)  # Cyan
-            else:
-                label = f"LUGGAGE #{track_id} | {conf}% | {severity} ({risk_score}%)"
-                sub_label = None
+        behaviour_label = {
+            "ALERT": "SUSPICIOUS",
+            "CRITICAL": "SUSPICIOUS",
+            "HIGH": "SUSPICIOUS",
+            "COOLING_DOWN": "COOLING",
+        }.get(str(b_state), str(b_state))
+        label = f"PERSON #{track_id} | {behaviour_label} | Risk: {severity}"
+        sub_label = (
+            f"Posture: {posture} ({pose_conf}%) | Dwell: {dwell}s | "
+            f"Meander: {meander:.1f} | Revisits: {revisits}"
+        )
 
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)
         cv2.rectangle(frame, (x1, max(0, y1 - th - 8)), (x1 + tw + 6, max(th + 8, y1)), color, -1)
@@ -120,14 +98,13 @@ def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
         threats = info.get("active_threats", set())
         if threats:
             threat_display_map = {
-                "RESTRICTED_ZONE": "⚠ RESTRICTED ZONE ENTRY",
+                "POSSIBLE_FALL": "⚠ POSSIBLE FALL / ASSISTANCE REQUIRED",
                 "LONG_DWELL": "⚠ LONG DWELL",
                 "REPEATED_MOVEMENT": "⚠ REPEATED MOVEMENT",
                 "SUSPICIOUS_LOITERING": "⚠ SUSPICIOUS LOITERING",
                 "LOITERING": "⚠ LOITERING",
                 "HIGH_CONFIDENCE_SUSPICIOUS": "🚨 HIGH-CONFIDENCE SUSPICIOUS BEHAVIOUR",
                 "SUDDEN_RUNNING": "⚠ SUDDEN RUNNING",
-                "UNATTENDED_OBJECT": "🚨 UNATTENDED BAGGAGE" if severity != "CRITICAL" else "🚨 CRITICAL BAGGAGE",
             }
             # Avoid displaying redundant aliases
             display_threats = [t for t in threats if not (t == "LOITERING" and "SUSPICIOUS_LOITERING" in threats)]
@@ -137,7 +114,7 @@ def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
             cv2.putText(frame, threat_str, (x1 + 3, badge_y + tth + 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
 
-            # Fire alerts with per-behaviour cooldown (zone vs loiter stay independent)
+            # Fire alerts with per-behaviour cooldown
             last_alert_times = info.setdefault("last_alert_times", {})
             for t in threats:
                 if t == "LOITERING" and "SUSPICIOUS_LOITERING" in threats:
@@ -149,7 +126,7 @@ def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
                     info["last_alert_time"] = current_time
                     event_name = threat_display_map.get(t, t)
                     evidence_desc = (
-                        f"Dwell={dwell}s, Meander={meander:.1f}, Revisits={revisits}, Zone={zone_str}"
+                        f"Posture={posture}, Dwell={dwell}s, Meander={meander:.1f}, Revisits={revisits}"
                         if is_human else ""
                     )
                     new_alerts.append({
@@ -162,7 +139,7 @@ def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
                         "score": risk_score,
                         "evidence": info.get("suspicion_evidence", {}),
                         "description": (
-                            f"{'PERSON' if is_human else 'LUGGAGE'} #{track_id} — {event_name} ({severity})"
+                            f"PERSON #{track_id} — {event_name} ({severity})"
                             + (f" [{evidence_desc}]" if evidence_desc else "")
                         )
                     })
@@ -178,8 +155,9 @@ def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
         frame = cv2.addWeighted(overlay, 0.85, frame, 0.15, 0)
 
         banner_text = " \u26A0 ALERT: " + " | ".join(
-            f"{'PERSON' if is_person(i['class_name']) else 'LUGGAGE'}#{i['track_id']} ({','.join(t for t in i['active_threats'] if t != 'LOITERING') or 'ALERT'})"
+            f"PERSON#{i['track_id']} ({','.join(t for t in i['active_threats'] if t != 'LOITERING') or 'ALERT'})"
             for i in active_threat_items[:2]
+            if is_person(i.get("class_name", ""))
         )[:70] + " — SECURITY ATTENTION REQUIRED"
         cv2.putText(frame, banner_text, (10, 24),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.42, (60, 60, 255), 2)
