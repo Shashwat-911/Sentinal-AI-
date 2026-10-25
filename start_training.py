@@ -145,7 +145,7 @@ def main():
     print(f"============================================================")
     print(f"  Final mAP@50: {map50:.5f}")
 
-    # Ensure best.pt is copied to models/best.pt and models/train/weights/best.pt
+    # Ensure the best checkpoint is copied to the conventional model output paths.
     best_weights = os.path.join(save_dir, run_name, "weights", "best.pt")
     target_best = os.path.join(save_dir, "best.pt")
     if os.path.isfile(best_weights):

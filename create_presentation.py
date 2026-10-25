@@ -103,7 +103,7 @@ def create_deck():
     p1.space_before = Pt(8)
 
     p2 = tf1.add_paragraph()
-    p2.text = "Real-Time Unattended Luggage Detection & Loitering Analytics Engine"
+    p2.text = "Real-Time Person Detection, Tracking, Posture & Behaviour Analytics Engine"
     p2.font.size = Pt(15)
     p2.font.color.rgb = COLOR_MUTED
     p2.font.name = "Arial"
@@ -140,8 +140,8 @@ def create_deck():
 
     bullet1 = [
         ("Operator Attention Decay: ", "CCTV operators lose up to 95% of visual attention after 20 minutes of continuous screen monitoring."),
-        ("High-Threat Blindspots: ", "Unattended baggage in high-footfall areas (airports, stations) goes unnoticed until critical delay."),
-        ("False Alarm Overload: ", "Traditional motion detectors produce constant false alarms without owner-presence context.")
+        ("High-Threat Blindspots: ", "Unusual dwell, pacing, repeated movement, or person-down events can go unnoticed in busy public spaces."),
+        ("False Alarm Overload: ", "Traditional motion detectors produce constant false alarms without person-level behavioural context.")
     ]
     for title, desc in bullet1:
         p = tf1.add_paragraph()
@@ -171,9 +171,9 @@ def create_deck():
     p.font.color.rgb = COLOR_TEAL
 
     bullet2 = [
-        ("Automated Object Detection: ", "Deploy deep learning models to automatically detect luggage and persons simultaneously."),
-        ("Temporal Dwell-Time Tracking: ", "Track dwell times and calculate real-time unattended risk scores (0–100%)."),
-        ("Smart Owner-Return Cancellation: ", "Disarm alerts automatically when owners return within proximity, reducing false alarms."),
+        ("Automated Person Detection: ", "Deploy deep learning models to detect and track people only."),
+        ("Temporal Dwell-Time Tracking: ", "Track dwell times and calculate explainable person-behaviour risk scores (0–100%)."),
+        ("Posture and Fall Review: ", "Detect posture states and raise non-modal possible-fall safety incidents."),
         ("Auditable Reporting Engine: ", "Generate instant PDF incident reports and structured Excel logs for security personnel.")
     ]
     for title, desc in bullet2:
@@ -197,9 +197,9 @@ def create_deck():
     add_header(slide3, "System Architecture & Modular Structure")
 
     modules = [
-        ("DUAL INFERENCE ENGINE", "Custom YOLO Luggage Model (best.pt) + Pretrained YOLOv9s Person Model (COCO Class 0)", COLOR_TEAL),
+        ("PERSON INFERENCE ENGINE", "Pretrained YOLOv9s Person Model (COCO Class 0)", COLOR_TEAL),
         ("CENTROID TRACKER", "Multi-object ID assignment with Exponential Moving Average (EMA) spatial smoothing", COLOR_BLUE),
-        ("RISK ANALYSIS ENGINE", "Dwell time counter, 4-tier risk severity scoring & Proximity owner-return checker", COLOR_AMBER),
+        ("RISK ANALYSIS ENGINE", "Dwell, trajectory, meander, revisit, posture, and safety-event scoring", COLOR_AMBER),
         ("GUI DASHBOARD", "Tkinter desktop HUD, live OpenCV video player, parameter controls & Matplotlib graphs", COLOR_TEAL),
         ("AUDIT & REPORTING", "Automated PDF incident generator (reportlab) & session Excel logger (openpyxl)", COLOR_PURPLE)
     ]
@@ -365,7 +365,7 @@ def create_deck():
         ("Phase 1", "Ingestion", "OpenCV reads webcam, RTSP stream, or video file"),
         ("Phase 2", "Dual Inference", "Passes frame to Bag & Person YOLO detectors"),
         ("Phase 3", "Centroid Tracking", "Assigns persistent IDs & applies EMA smoothing"),
-        ("Phase 4", "Risk Analysis", "Calculates dwell time & checks owner proximity"),
+        ("Phase 4", "Risk Analysis", "Calculates dwell, movement, posture, and risk evidence"),
         ("Phase 5", "HUD & Reporting", "Draws dynamic overlay, triggers alarms & PDF log")
     ]
 
@@ -429,8 +429,8 @@ def create_deck():
     p.font.color.rgb = COLOR_TEAL
 
     items1 = [
-        ("Spatial Distance Check: ", "Calculates Euclidean distance between bag centroid (bcx, bcy) and all person centroids (pcx, pcy)."),
-        ("Proximity Threshold: ", "If dist ≤ 150 pixels, the system identifies owner presence."),
+        ("Trajectory Evidence: ", "Calculates path length, net displacement, meander ratio, and revisited grid cells for each person."),
+        ("Temporal Thresholds: ", "Signals are confirmed over time before incidents are recorded."),
         ("State Reset: ", "Disarms alert instantly, resets first_seen timer, and displays 'OWNER RETURNED' for 90 frames."),
         ("Impact: ", "Drastically reduces false alarms without operator manual intervention.")
     ]
@@ -560,7 +560,7 @@ def create_deck():
     p.font.bold = True
     p.font.color.rgb = COLOR_BLUE
     p2 = tf.add_paragraph()
-    p2.text = "• Built with openpyxl\n• Tracks total bag detections, loitering counts, confidence values, and timestamped events\n• Enables post-session statistical analysis."
+    p2.text = "• Built with openpyxl\n• Tracks person detections, loitering counts, confidence values, posture events, and timestamps\n• Enables post-session statistical analysis."
     p2.font.size = Pt(11)
     p2.font.color.rgb = COLOR_BODY
     p2.space_before = Pt(12)
@@ -606,7 +606,7 @@ def create_deck():
 
     rows_data = [
         ("Surveillance Model", "Manual Human Operator (Fatigue-prone)", "100% Automated 24/7 Deep Learning Pipeline"),
-        ("Contextual Awareness", "Simple Pixel Motion (High False Alarms)", "Proximity Owner-Return Check (Smart Disarm)"),
+        ("Contextual Awareness", "Simple Pixel Motion (High False Alarms)", "Person-level trajectory and posture evidence"),
         ("Risk Prioritization", "Binary Alert (Motion / No Motion)", "Dynamic 4-Tier Risk Score (0-100% Severity)"),
         ("Deployment & Cost", "High Cloud Streaming Costs", "Edge-Compatible Zero-Cloud Local Execution")
     ]
@@ -630,10 +630,10 @@ def create_deck():
     add_header(slide10, "Future Enhancements & Scalability Roadmap")
 
     enhancements = [
-        ("Multi-Camera Person Re-Identification (Re-ID)", "Deploy deep feature embedding networks to track owners across non-overlapping camera feeds in large airports or station terminals.", COLOR_TEAL),
+        ("Multi-Camera Person Re-Identification (Re-ID)", "Deploy deep feature embedding networks to track people across non-overlapping camera feeds in large airports or station terminals.", COLOR_TEAL),
         ("TensorRT & GPU Multi-Stream Scaling", "Export PyTorch models to TensorRT ONNX engines to achieve 60+ FPS processing across 16+ simultaneous 4K camera streams.", COLOR_BLUE),
         ("Cloud & Mobile Security Push Notifications", "Integrate MQTT / WebSockets gateway to push instant critical risk alerts and video snapshots directly to security officers' mobile apps.", COLOR_AMBER),
-        ("Automated PTZ Camera Tracking", "Send pan-tilt-zoom motor commands to cameras to automatically zoom in and isolate identified high-risk unattended bags.", COLOR_PURPLE)
+        ("Automated PTZ Camera Tracking", "Send pan-tilt-zoom motor commands to cameras to automatically zoom in on high-risk person tracks.", COLOR_PURPLE)
     ]
 
     top_pos = 1.6
