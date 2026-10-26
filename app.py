@@ -10,12 +10,15 @@ Full Tkinter desktop application for AI-based person detection, tracking, behavi
 import tkinter as tk
 from tkinter import ttk, filedialog
 import threading
+import queue
+import copy
 import os
 import sys
 import time
 import re
 import subprocess
 import math
+from sentinel.incident_reports import load_reports
 
 import yaml
 import cv2
@@ -61,6 +64,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # MODULAR SENTINEL ENGINE INTEGRATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
+from sentinel.context_ui import ContextUI
 from sentinel.config import SentinelConfig
 from sentinel.detection import (
     OBJECT_GROUP_MAP, get_object_group, is_person,
@@ -98,11 +102,11 @@ def frame_to_tk(frame, canvas_w, canvas_h):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-class SentinelApp:
+class SentinelApp(ContextUI):
     def __init__(self, root):
         self.root = root
         self.root.title("SENTINEL AI \u2014 Public Safety Surveillance")
-        self.root.geometry("1400x900")
+        self.root.geometry(f"{min(1400, self.root.winfo_screenwidth()-60)}x{min(900, self.root.winfo_screenheight()-90)}")
         self.root.resizable(True, True)
         self.root.configure(bg=BG)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -112,6 +116,8 @@ class SentinelApp:
         self.training_process = None
         self.video_running = False
         self.camera_running = False
+        self.source_thread = None
+        self._closing = False
         self.current_training_epoch = 0
         self.train_losses = []
         self.map_values = []
@@ -123,8 +129,8 @@ class SentinelApp:
         self.app_pages = {}
         self.nav_buttons = {}
         self.current_page = None
-        self.incidents = []
-        self.unread_incidents = 0
+        self.incidents = load_reports()
+        self.unread_incidents = sum(not i["acknowledged"] for i in self.incidents)
         self.vid_processing_fps = 0.0
         self.cam_processing_fps = 0.0
         self.video_duration = 0.0
@@ -143,6 +149,7 @@ class SentinelApp:
         self._build_video_tab()
         self._build_camera_tab()
         self._build_incidents_page()
+        self._refresh_incidents_view()
         self._build_overview_page()
         self._build_settings_page()
         self._show_page("overview")
@@ -152,6 +159,8 @@ class SentinelApp:
     # ── Cleanup ──────────────────────────────────────────────────────────────
 
     def _on_close(self):
+        self._closing = True
+        self.context_engine.close()
         self.video_running = False
         self.camera_running = False
         if self.training_process:
@@ -230,7 +239,7 @@ class SentinelApp:
         nav_items = [
             ("overview", "Overview"),
             ("camera", "Live Monitoring"),
-            ("video", "Video Analysis"),
+            ("video", "Video Demo"),
             ("incidents", "Incidents"),
             ("dataset", "Dataset"),
             ("train", "Training"),
@@ -450,16 +459,19 @@ class SentinelApp:
         tk.Button(filters, text="Dismiss Selected", font=FONT_SMALL, bg=CARD, fg=WARNING,
                   relief="flat", command=self._dismiss_selected_incident).pack(side="left")
 
-        columns = ("time", "source", "category", "severity", "target", "status", "evidence")
+        tk.Button(filters, text="View Report", font=FONT_SMALL, bg=CARD, fg=INFO,
+                  relief="flat", command=self._open_incident_report).pack(side="left", padx=8)
+
+        columns = ("time", "source", "category", "severity", "target", "status", "report", "evidence")
         self.incident_tree = ttk.Treeview(self.tab_incidents, columns=columns, show="headings", height=14)
-        widths = [90, 90, 170, 90, 90, 120, 440]
+        widths = [70, 65, 150, 75, 85, 100, 100, 340]
         for col, width in zip(columns, widths):
             self.incident_tree.heading(col, text=col.title())
             self.incident_tree.column(col, width=width, anchor="w")
         self.incident_tree.pack(fill="both", expand=True, padx=18, pady=(0, 8))
         self.incident_tree.bind("<<TreeviewSelect>>", lambda _e: self._show_selected_incident_details())
 
-        details = tk.Frame(self.tab_incidents, bg=CARD, highlightthickness=1, highlightbackground=BORDER, height=130)
+        details = tk.Frame(self.tab_incidents, bg=CARD, highlightthickness=1, highlightbackground=BORDER, height=240)
         details.pack(fill="x", padx=18, pady=(0, 18))
         details.pack_propagate(False)
         tk.Label(details, text="Incident Details", font=("Segoe UI", 11, "bold"),
@@ -1145,7 +1157,7 @@ class SentinelApp:
                   activebackground=PANEL, command=self._upload_video
                   ).pack(side="left", padx=(10, 5), pady=8)
 
-        self.video_fname = tk.Label(ctrl, text="No file selected", font=FONT_SMALL,
+        self.video_fname = tk.Label(ctrl, text="No file selected", width=22, anchor="w", font=FONT_SMALL,
                                      fg=MUTED, bg=PANEL)
         self.video_fname.pack(side="left", padx=5)
         self.video_time_label = tk.Label(ctrl, text="00:00 / 00:00", font=FONT_SMALL,
@@ -1167,6 +1179,8 @@ class SentinelApp:
         tk.Label(ctrl, text="CONFIDENCE", font=FONT_SMALL, fg=MUTED,
                  bg=PANEL).pack(side="left", padx=(20, 2))
         self.vid_conf = tk.DoubleVar(value=0.25)
+        self.video_confidence = 0.25
+        self.vid_conf.trace_add("write", lambda *_: setattr(self, "video_confidence", float(self.vid_conf.get())))
         tk.Scale(ctrl, from_=0.1, to=0.9, resolution=0.05, orient="horizontal",
                  variable=self.vid_conf, bg=PANEL, fg=ACCENT, troughcolor=CARD,
                  highlightthickness=0, font=FONT_SMALL, length=110, sliderlength=14
@@ -1216,18 +1230,20 @@ class SentinelApp:
         self.vid_alert_log.config(state="disabled")
 
         # Right Column (Cyber-HUD Sidebar Behavior Panel)
-        right_col = tk.Frame(main_layout, bg=PANEL, width=320)
+        right_col = tk.Frame(main_layout, bg=PANEL, width=430)
         right_col.pack(side="right", fill="both", expand=False, padx=(10, 0))
         right_col.pack_propagate(False)
 
-        tk.Label(right_col, text="ANALYSIS DETAILS", font=FONT_HEADING,
-                 fg=ACCENT, bg=PANEL).pack(pady=(15, 10))
+        tk.Label(right_col, text="DETECTION DETAILS", font=FONT_BODY,
+                 fg=ACCENT, bg=PANEL).pack(pady=(5, 2))
+
+        self._build_video_context(right_col)
 
         # Active Targets Display
         tk.Label(right_col, text="ACTIVE TARGETS", font=FONT_SMALL, fg=MUTED,
                  bg=PANEL).pack(anchor="w", padx=15, pady=(10, 2))
         self.vid_targets_log = tk.Text(right_col, bg=CARD, fg=TEXT, font=FONT_BODY,
-                                       relief="flat", height=10, padx=10, pady=5,
+                                       relief="flat", height=4, padx=10, pady=5,
                                        highlightthickness=0)
         self.vid_targets_log.pack(fill="x", padx=10, pady=2)
         self.vid_targets_log.config(state="disabled")
@@ -1235,15 +1251,15 @@ class SentinelApp:
         # Global Risk Meter
         tk.Label(right_col, text="GLOBAL RISK SEVERITY", font=FONT_SMALL, fg=MUTED,
                  bg=PANEL).pack(anchor="w", padx=15, pady=(10, 2))
-        self.vid_risk_lbl = tk.Label(right_col, text="NORMAL", font=("Consolas", 20, "bold"),
-                                     fg=ACCENT, bg=CARD, pady=12)
+        self.vid_risk_lbl = tk.Label(right_col, text="NORMAL", font=("Consolas", 14, "bold"),
+                                     fg=ACCENT, bg=CARD, pady=4)
         self.vid_risk_lbl.pack(fill="x", padx=10, pady=2)
 
         # Recent Behavior Events
         tk.Label(right_col, text="RECENT BEHAVIOR EVENTS", font=FONT_SMALL, fg=MUTED,
                  bg=PANEL).pack(anchor="w", padx=15, pady=(10, 2))
         self.vid_events_log = tk.Text(right_col, bg=CARD, fg=WARNING, font=FONT_SMALL,
-                                      relief="flat", height=6, padx=10, pady=5,
+                                      relief="flat", height=3, padx=10, pady=5,
                                       highlightthickness=0)
         self.vid_events_log.pack(fill="both", expand=True, padx=10, pady=(2, 15))
         self.vid_events_log.config(state="disabled")
@@ -1252,140 +1268,209 @@ class SentinelApp:
         self.vid_tracked_entities = {}
         self.vid_fcount = 0
 
+        self.video_frames = queue.Queue(maxsize=1)
+        self.video_events = queue.Queue()
+        self.video_session = 0
+        self._video_models = None
+        self._video_ui_tick = 0.0
+        self.root.after(40, self._poll_video)
+
     def _upload_video(self):
-        path = filedialog.askopenfilename(
-            title="Select Video File",
-            filetypes=[("Video Files", "*.mp4 *.avi *.mov *.mpg"), ("All Files", "*.*")]
-        )
+        if self.video_running or (self.source_thread and self.source_thread.is_alive()):
+            self._set_status("Stop the active source before changing video.", WARNING)
+            return
+        path = filedialog.askopenfilename(title="Select Video File",
+            filetypes=[("Video Files", "*.mp4 *.avi *.mov *.mpg *.mpeg *.mkv *.m4v"), ("All Files", "*.*")])
         if path:
-            self.video_path = path
-            self.video_fname.config(text=os.path.basename(path), fg=TEXT)
-            self.video_source_status = f"Selected {os.path.basename(path)}"
-            self.btn_vid_play.config(state="normal")
+            self._select_video(path)
+
+    def _select_video(self, path):
+        """Decode a preview immediately; model loading is deferred to the worker."""
+        cap = cv2.VideoCapture(path)
+        try:
+            ok, frame = cap.read()
+            if not cap.isOpened() or not ok or frame is None:
+                self.video_path = None
+                self.btn_vid_play.config(state="disabled")
+                self.video_source_status = "Cannot decode selected video"
+                self._set_status(self.video_source_status, DANGER)
+                self._canvas_msg(self.vid_canvas, self.video_source_status)
+                return False
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            fps = fps if math.isfinite(fps) and fps > 0 else 30.0
+            self.video_duration = cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps
+        finally:
+            cap.release()
+        self.video_session += 1
+        if self.video_path and self.video_path != path:
+            # Recording time belongs to a specific file, not the next uploaded clip.
+            self.context_start.set("")
+            self.context_settings = {**self.context_settings, "recording_start": ""}
+        self.video_path = path
+        self.video_position = 0.0
+        self.video_fname.config(text=os.path.basename(path), fg=TEXT)
+        self.video_source_status = f"Ready: {os.path.basename(path)}"
+        self.btn_vid_play.config(state="normal")
+        self._reset_context()
+        self._last_frame = frame
+        self.root.after_idle(self._show_frame, frame, self.vid_canvas)
+        self._update_video_progress()
+        self._set_status("Video loaded. Press PLAY to start detection and visual context.", ACCENT)
+        return True
 
     def _play_video(self):
+        if self.video_running or self.camera_running or (self.source_thread and self.source_thread.is_alive()):
+            self._set_status("Stop the active source before starting another.", WARNING)
+            return
         if not self.video_path:
             return
-
-        person_model, status = load_person_model(BASE_DIR)
-        pose_model = load_pose_model(BASE_DIR)
-        self.model_status_text = status
-        self.pose_status_text = "Available" if pose_model is not None else "Unavailable"
-        if person_model is None:
-            self._canvas_msg(self.vid_canvas, f"Models failed to load: {status}")
-            return
-
+        self._reset_context()
+        self.video_session += 1
         self.video_running = True
         self.vid_tracked_entities = {}
         self.vid_fcount = 0
+        self.video_position = 0.0
+        self.vid_conf_history.clear()
         self.btn_vid_play.config(state="disabled")
         self.btn_vid_stop.config(state="normal")
-        self.video_source_status = f"Processing {os.path.basename(self.video_path)}"
-        self._set_status("DETECTING", WARNING)
+        self.video_source_status = "Loading detection models in background..."
+        self._set_status(self.video_source_status, WARNING)
+        self.source_thread = threading.Thread(target=self._video_worker,
+            args=(self.video_path, self.video_session), daemon=True)
+        self.source_thread.start()
 
-        threading.Thread(target=self._video_worker, args=(person_model, pose_model), daemon=True).start()
-
-    def _video_worker(self, person_model, pose_model):
+    def _video_worker(self, path, session):
+        """All decoding/inference runs off Tk; bounded frames prevent UI backlog."""
         cap = None
+        outcome = "Stopped"
         try:
-            if not self.video_path or not os.path.isfile(self.video_path):
-                self.root.after(0, self._canvas_msg, self.vid_canvas, "Video file not found or invalid.")
-                self.root.after(0, self._set_status, "FILE NOT FOUND", DANGER)
-                return
-
-            cap = cv2.VideoCapture(self.video_path)
-            if not cap or not cap.isOpened():
-                self.root.after(0, self._canvas_msg, self.vid_canvas, f"Cannot open video:\n{os.path.basename(self.video_path)}")
-                self.root.after(0, self._set_status, "CANNOT OPEN VIDEO", DANGER)
-                return
-
-            fps = cap.get(cv2.CAP_PROP_FPS) or 30
-            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
-            self.video_duration = (frame_count / fps) if fps else 0.0
-            delay = 1.0 / max(fps, 1)
-            perf_last = time.perf_counter()
-
-            while self.video_running and cap.isOpened():
-                ret, frame = cap.read()
-                if not ret or frame is None or frame.size == 0:
+            cap = cv2.VideoCapture(path)
+            if not cap.isOpened():
+                raise ValueError(f"Cannot open video: {os.path.basename(path)}")
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            fps = fps if math.isfinite(fps) and fps > 0 else 30.0
+            duration = cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps
+            if self._video_models is None:
+                person_model, status = load_person_model(BASE_DIR)
+                pose_model = load_pose_model(BASE_DIR)
+                if person_model is None:
+                    raise RuntimeError(status)
+                self._video_models = (person_model, pose_model, status)
+            person_model, pose_model, status = self._video_models
+            self.video_events.put((session, "models", (status, pose_model is not None, duration)))
+            tracked = {}
+            frame_count = 0
+            previous_time = -1.0
+            while self.video_running and not self._closing:
+                started = time.perf_counter()
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    if frame_count == 0:
+                        raise ValueError("Video opened but its frames could not be decoded")
+                    outcome = "Finished"
                     break
-
-                self.vid_fcount += 1
+                frame_count += 1
                 video_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
-                if video_time <= 0:
-                    video_time = self.vid_fcount / max(fps, 1)
-                self.video_position = video_time
-                perf_now = time.perf_counter()
-                dt = perf_now - perf_last
-                perf_last = perf_now
-                if dt > 0:
-                    self.vid_processing_fps = 1.0 / dt
-                
-                person_dets = detect_persons(frame, person_model, self.vid_conf.get())
-                merged_dets = iou_deduplicate(person_dets)
-
-                # Tracking match
-                self.vid_tracked_entities = match_entities(
-                    merged_dets, self.vid_tracked_entities, current_time=video_time
-                )
-                
-                # Human posture estimation & temporal fall check
-                fall_alerts = estimate_postures(
-                    frame, self.vid_tracked_entities, pose_model, current_time=video_time
-                )
-
-                # Behavior analysis and overlay drawing (renders skeleton and telemetry)
-                annotated, new_alerts = draw_overlays(
-                    frame, self.vid_tracked_entities, self.vid_fcount, current_time=video_time
-                )
-                new_alerts = fall_alerts + new_alerts
-                self._last_frame = annotated.copy()
-
-                # Update live HUD statistics on every frame
-                self.root.after(0, self._update_hud_sidebar, "vid", self.vid_tracked_entities)
-
-                self.root.after(0, self._update_conf_histogram,
-                                person_dets,
-                                self.vid_hist_ax, self.vid_hist_canvas,
-                                self.vid_conf_history)
-
-                # Process newly triggered suspicious behavior alerts
-                for alert in new_alerts:
-                    is_high_threat = (alert["severity"] in ("HIGH", "CRITICAL"))
-                    
-                    if is_high_threat or alert["behavior"] == "POSSIBLE_FALL":
-                        snapshot = annotated.copy()
+                if not math.isfinite(video_time) or video_time <= previous_time:
+                    video_time = frame_count / fps
+                previous_time = video_time
+                person_dets = detect_persons(frame, person_model, self.video_confidence)
+                tracked = match_entities(iou_deduplicate(person_dets), tracked, current_time=video_time)
+                fall_alerts = estimate_postures(frame, tracked, pose_model, current_time=video_time)
+                # Preserve clean pixels before the overlay function mutates the frame.
+                raw_frame = frame.copy()
+                brightness = float(cv2.cvtColor(raw_frame[::16, ::16], cv2.COLOR_BGR2GRAY).mean())
+                annotated, alerts = draw_overlays(frame, tracked, frame_count, current_time=video_time)
+                try:
+                    self._observe_context(self.context_generation, "vid", video_time, tracked, brightness, raw_frame)
+                except Exception as exc:
+                    self.video_events.put((session, "context_error", str(exc)))
+                if fall_alerts or alerts:
+                    self.context_engine.observe(self.context_generation, "vid", video_time, tracked, brightness,
+                                                self.context_settings, frame=raw_frame, force=True, urgent=True)
+                for alert in fall_alerts + alerts:
+                    if alert["severity"] in ("HIGH", "CRITICAL") or alert["behavior"] == "POSSIBLE_FALL":
                         alert["snapshot_path"] = self._save_incident_snapshot(
-                            snapshot, alert["behavior"], alert["track_id"], alert["severity"])
-                        self.root.after(0, self._play_alert_sound)
-
-                    self.root.after(0, self._fire_behavior_alert, "vid", alert)
-
-                self.root.after(0, self._update_video_progress)
-                self.root.after(0, self._show_frame, annotated, self.vid_canvas)
-                time.sleep(delay)
-
-        except Exception as e:
-            print(f"Video error: {e}")
-            self.root.after(0, self._set_status, f"ERROR: {e}", DANGER)
+                            annotated.copy(), alert["behavior"], alert["track_id"], alert["severity"])
+                    alert["video_seconds"] = video_time
+                    alert["context_run"] = self.context_run
+                    self.video_events.put((session, "alert", alert))
+                packet = dict(frame=annotated, tracks=copy.deepcopy(tracked), detections=person_dets,
+                              position=video_time, frame_count=frame_count,
+                              fps=1.0 / max(time.perf_counter() - started, .001))
+                try:
+                    self.video_frames.get_nowait()
+                except queue.Empty:
+                    pass
+                self.video_frames.put_nowait((session, packet))
+                time.sleep(max(0.0, 1.0 / fps - (time.perf_counter() - started)))
+            if frame_count and not self._closing:
+                self.context_engine.observe(self.context_generation, "vid", video_time, tracked, brightness, self.context_settings, frame=raw_frame, force=True)
+        except Exception as exc:
+            outcome = f"Video error: {exc}"
+            self.video_events.put((session, "error", outcome))
         finally:
             if cap is not None:
-                try:
-                    cap.release()
-                except Exception:
-                    pass
-            self.root.after(0, self._video_stopped)
+                cap.release()
+            self.video_events.put((session, "done", outcome))
+
+    def _poll_video(self):
+        if self._closing:
+            return
+        try:
+            while True:
+                session, kind, payload = self.video_events.get_nowait()
+                if session != self.video_session:
+                    continue
+                if kind == "models":
+                    self.model_status_text, pose_ok, self.video_duration = payload
+                    self.pose_status_text = "Available" if pose_ok else "Unavailable"
+                    self.video_source_status = f"Processing {os.path.basename(self.video_path)}"
+                    self._set_status("DETECTING + VISUAL CONTEXT", ACCENT)
+                elif kind == "alert":
+                    if payload["severity"] in ("HIGH", "CRITICAL") or payload["behavior"] == "POSSIBLE_FALL":
+                        self._play_alert_sound()
+                    self._fire_behavior_alert("vid", payload)
+                elif kind == "context_error":
+                    self.context_status.set(f"Context unavailable: {payload}. Video continues.")
+                elif kind == "error":
+                    self._canvas_msg(self.vid_canvas, payload)
+                    self._set_status(payload, DANGER)
+                elif kind == "done":
+                    self._video_stopped(payload)
+        except queue.Empty:
+            pass
+        try:
+            session, packet = self.video_frames.get_nowait()
+            if session == self.video_session:
+                self._last_frame = packet["frame"]
+                self.vid_tracked_entities = packet["tracks"]
+                self.vid_fcount = packet["frame_count"]
+                self.video_position = packet["position"]
+                self.vid_processing_fps = packet["fps"]
+                self._show_frame(packet["frame"], self.vid_canvas)
+                self._update_video_progress()
+                if time.monotonic() - self._video_ui_tick >= .4:
+                    self._update_hud_sidebar("vid", packet["tracks"])
+                    self._update_conf_histogram(packet["detections"], self.vid_hist_ax,
+                                               self.vid_hist_canvas, self.vid_conf_history)
+                    self._video_ui_tick = time.monotonic()
+        except queue.Empty:
+            pass
+        self.root.after(40, self._poll_video)
 
     def _stop_video(self):
         self.video_running = False
         self._stop_alert_sound()
+        self._set_status("Stopping video...", WARNING)
 
-    def _video_stopped(self):
+    def _video_stopped(self, outcome="Stopped"):
         self.video_running = False
-        self.video_source_status = "Stopped"
+        self.video_source_status = outcome
         self.btn_vid_play.config(state="normal")
         self.btn_vid_stop.config(state="disabled")
-        self._set_status("IDLE", ACCENT)
+        self._stop_alert_sound()
+        self._set_status(outcome, DANGER if outcome.startswith("Video error") else ACCENT)
 
     def _update_video_progress(self):
         if hasattr(self, "video_time_label"):
@@ -1515,6 +1600,9 @@ class SentinelApp:
         self.cam_fcount = 0
 
     def _start_camera(self):
+        if self.video_running or self.camera_running or (self.source_thread and self.source_thread.is_alive()):
+            self._set_status("Stop the active source before starting another.", WARNING)
+            return
         person_model, status = load_person_model(BASE_DIR)
         pose_model = load_pose_model(BASE_DIR)
         self.model_status_text = status
@@ -1539,8 +1627,9 @@ class SentinelApp:
         self.cam_status_inline.config(text=self.camera_source_status, fg=WARNING)
         self._set_status("CONNECTING TO CAMERA...", WARNING)
 
-        threading.Thread(target=self._camera_worker,
-                         args=(person_model, pose_model, cam_idx), daemon=True).start()
+        self.source_thread = threading.Thread(target=self._camera_worker,
+                         args=(person_model, pose_model, cam_idx), daemon=True)
+        self.source_thread.start()
 
     def _camera_worker(self, person_model, pose_model, cam_idx):
         cap = None
@@ -1603,6 +1692,7 @@ class SentinelApp:
                     frame, self.cam_tracked_entities, pose_model, current_time=frame_time
                 )
 
+                context_brightness = float(cv2.cvtColor(frame[::16, ::16], cv2.COLOR_BGR2GRAY).mean())
                 # Behavior analysis and overlay drawing (renders skeleton and telemetry)
                 annotated, new_alerts = draw_overlays(
                     frame, self.cam_tracked_entities, self.cam_fcount, current_time=frame_time
@@ -1857,12 +1947,18 @@ class SentinelApp:
             "class_name": class_name,
             "object_label": f"{class_name.upper()}#{track_id}",
             "summary": self._incident_summary(alert),
+            "video_seconds": alert.get("video_seconds"),
+            "context_run": alert.get("context_run"),
+            "video_path": self.video_path if stream_type == "vid" else None,
             "message": alert_msg.strip(),
             "snapshot_path": alert.get("snapshot_path"),
             "acknowledged": False,
             "dismissed": False,
         }
         self.incidents.append(incident)
+        self._save_incident_report(incident)
+        for result in self.context_results:
+            self._attach_context_to_incidents(result)
         self.unread_incidents += 1
         self._update_incident_badges()
         self._refresh_incidents_view()
@@ -1888,6 +1984,7 @@ class SentinelApp:
         except Exception:
             pass
 
+        selected = self.incident_tree.selection()
         self.incident_tree.delete(*self.incident_tree.get_children())
         for incident in reversed(self.incidents):
             if category_filter != "All" and incident["category"] != category_filter:
@@ -1899,9 +1996,13 @@ class SentinelApp:
                 "", "end", iid=str(incident["id"]),
                 values=(
                     incident["time"], incident["source"], incident["category"],
-                    incident["severity"], incident["object_label"], status, incident["summary"]
+                    incident["severity"], incident["object_label"], status,
+                    "Save failed" if incident.get("report_error") else ("Context saved" if incident.get("context_reports") else "Trigger saved"), incident["summary"]
                 )
             )
+        for iid in selected:
+            if self.incident_tree.exists(iid):
+                self.incident_tree.selection_set(iid)
         self._show_selected_incident_details()
 
     def _selected_incident(self):
@@ -1926,13 +2027,66 @@ class SentinelApp:
             f"Evidence: {incident['summary']}\n"
             f"Snapshot: {incident.get('snapshot_path') or 'Not saved for this event'}"
         )
+        details += "\nReport: " + incident.get("report_path", "Not saved")
+        details += "\n\nWHY REPORTED (original trigger)\n" + incident["summary"]
+        details += "\n\nSCENE CONTEXT (separate model interpretation)\n" + incident.get("context_brief", "No matching context report yet. Original trigger evidence saved.")
         self._set_text(self.incident_details, details)
+
+    def _open_incident_report(self):
+        incident = self._selected_incident()
+        if not incident:
+            return
+        from sentinel.context_report import format_report
+        from sentinel.incident_reports import HypothesisHistory
+        window = tk.Toplevel(self.root)
+        window.title(f"Incident {incident['id']} — saved evidence report")
+        window.geometry("850x650")
+        text = tk.Text(window, wrap="word", bg=CARD, fg=TEXT, padx=15, pady=15)
+        bar = ttk.Scrollbar(window, command=text.yview)
+        bar.pack(side="right", fill="y")
+        text.configure(yscrollcommand=bar.set)
+        text.pack(fill="both", expand=True)
+        self.incident_report_window = window
+        self.incident_report_text = text
+        previous = [None]
+        def refresh():
+            if not window.winfo_exists():
+                return
+            reports = incident.get("context_reports", [])
+            waiting = incident.get("context_run") == self.context_run and (
+                self.video_running or self.context_engine.busy is not None or self.context_engine.has_pending())
+            state = (len(reports), waiting, incident.get("context_error"))
+            if state != previous[0]:
+                previous[0] = state
+                parts = ["WHY REPORTED (original trigger)", incident["summary"],
+                         "Red severity is a movement-rule alert, not proof of intent. Visual review may disagree.",
+                         f"Video time: {incident.get('video_seconds')}s", f"Saved: {incident.get('report_path', 'Unavailable')}"]
+                history = HypothesisHistory()
+                for result in reports:
+                    history.update(result["assessment"], result["timestamp"])
+                if reports:
+                    latest = reports[-1]
+                    parts += ["LATEST MATCHING SCENE REVIEW (not a person-specific finding)",
+                              format_report(latest["assessment"], latest["packet"], latest["timestamp"]), history.text(),
+                              f"{len(reports)} matching reviews saved; this window refreshes automatically."]
+                elif incident.get("context_error"):
+                    parts.append("Analysis failed: " + incident["context_error"])
+                elif waiting:
+                    parts.append("Waiting for analysis covering this incident. This window updates automatically.")
+                else:
+                    parts.append("No covering analysis was saved for this run. This does not mean Ollama is offline.")
+                position = text.yview()[0]
+                self._set_text(text, "\n\n".join(parts))
+                text.yview_moveto(position)
+            window.after(500, refresh)
+        refresh()
 
     def _ack_selected_incident(self):
         incident = self._selected_incident()
         if not incident:
             return
         incident["acknowledged"] = True
+        self._save_incident_report(incident)
         self._stop_alert_sound()
         self._refresh_incidents_view()
 
@@ -1942,6 +2096,7 @@ class SentinelApp:
             return
         incident["dismissed"] = True
         incident["acknowledged"] = True
+        self._save_incident_report(incident)
         self._dismiss_target_alert(incident["class_name"], incident["track_id"])
         self._stop_alert_sound()
         self._refresh_incidents_view()
