@@ -50,3 +50,10 @@ test_videos/pexels_people.mp4
 .DS_Store
 Thumbs.db
 *.tmp
+
+# Local rollback snapshots and integration artifacts
+.local/
+evaluation/context_review/
+
+# Local incident and session reports
+incidents/reports/
