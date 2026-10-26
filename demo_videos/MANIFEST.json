@@ -1,0 +1,31 @@
+{
+  "source": {
+    "dataset": "UCF-Crime",
+    "mirror": "https://huggingface.co/datasets/mteb/ucf-crime",
+    "original_dataset_page": "https://www.crcv.ucf.edu/research/real-world-anomaly-detection-in-surveillance-videos/",
+    "downloaded_for": "local educational demonstration",
+    "note": "Check the dataset's terms before public redistribution or publication. Original labels describe dataset categories; demo groups are presentation groupings, not legal findings."
+  },
+  "groups": {
+    "normal": "Normal surveillance activity; expected to produce low concern when the scene supports that interpretation.",
+    "context_safety": "Context-dependent or safety events. These test whether the system distinguishes an incident from suspicious intent.",
+    "suspicious": "Dataset anomaly categories selected for suspicious-behavior demonstrations. The model must still review evidence and may return uncertain."
+  },
+  "files": [
+    {"group":"normal","original_label":"Normal","file":"normal/Normal_Videos_003_x264.mp4"},
+    {"group":"normal","original_label":"Normal","file":"normal/Normal_Videos_006_x264.mp4"},
+    {"group":"normal","original_label":"Normal","file":"normal/Normal_Videos_010_x264.mp4"},
+    {"group":"normal","original_label":"Normal","file":"normal/Normal_Videos_014_x264.mp4"},
+    {"group":"normal","original_label":"Normal","file":"normal/Normal_Videos_018_x264.mp4"},
+    {"group":"context_safety","original_label":"Arrest","file":"context_safety/Arrest002_x264.mp4"},
+    {"group":"context_safety","original_label":"Arrest","file":"context_safety/Arrest003_x264.mp4"},
+    {"group":"context_safety","original_label":"RoadAccidents","file":"context_safety/RoadAccidents001_x264.mp4"},
+    {"group":"context_safety","original_label":"RoadAccidents","file":"context_safety/RoadAccidents002_x264.mp4"},
+    {"group":"context_safety","original_label":"RoadAccidents","file":"context_safety/RoadAccidents004_x264.mp4"},
+    {"group":"suspicious","original_label":"Burglary","file":"suspicious/Burglary005_x264.mp4"},
+    {"group":"suspicious","original_label":"Burglary","file":"suspicious/Burglary017_x264.mp4"},
+    {"group":"suspicious","original_label":"Shoplifting","file":"suspicious/Shoplifting001_x264.mp4"},
+    {"group":"suspicious","original_label":"Stealing","file":"suspicious/Stealing036_x264.mp4"},
+    {"group":"suspicious","original_label":"Vandalism","file":"suspicious/Vandalism007_x264.mp4"}
+  ]
+}

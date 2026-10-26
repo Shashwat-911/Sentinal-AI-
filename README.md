@@ -89,6 +89,15 @@ by Git). New unit tests: `python -m unittest test_context -v`.
 
 ## Launch
 
+## Local demo video set
+
+The optional `demo_videos/` folder contains 15 downloaded 320×240 surveillance clips,
+balanced into five normal, five context/safety and five suspicious demonstrations.
+The MP4 files are intentionally ignored by Git because they are large; the source,
+original dataset labels and local file mapping are recorded in
+[`demo_videos/MANIFEST.json`](demo_videos/MANIFEST.json). Review the UCF-Crime dataset
+terms before redistributing the clips or publishing them with the project.
+
 ```bat
 run.bat
 ```
