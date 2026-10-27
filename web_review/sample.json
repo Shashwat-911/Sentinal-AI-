@@ -1,0 +1,4 @@
+[
+  {"category":"POSSIBLE_FALL","summary":"Synthetic workshop example: review a possible fall.","source":"Video","track_id":"PERSON-1","severity":"HIGH","time":"12:00:00","date":"2000-01-01","object_label":"person","class_name":"person","acknowledged":false,"dismissed":false},
+  {"category":"LONG_DWELL","summary":"Synthetic workshop example: person waiting near entrance.","source":"Video","track_id":"PERSON-2","severity":"LOW","time":"12:01:00","date":"2000-01-01","object_label":"person","class_name":"person","acknowledged":false,"dismissed":false}
+]

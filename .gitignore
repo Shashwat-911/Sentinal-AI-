@@ -60,3 +60,9 @@ demo_videos/**/*.mp4
 
 # Local incident and session reports
 incidents/reports/
+
+# Playwright dependencies and generated evidence
+node_modules/
+playwright-report/
+test-results/
+.playwright/

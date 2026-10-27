@@ -1,5 +1,7 @@
 # SENTINEL AI
 
+> **Playwright branch:** Runnable browser tests and workshop instructions are in [docs/PLAYWRIGHT.md](docs/PLAYWRIGHT.md). Start with `npm ci`, `npx playwright install chromium`, then `npm run test:e2e`. For ATF repository import, set the branch/ref to **playwright**.
+
 SENTINEL AI is a desktop surveillance-analysis dashboard for person detection, persistent person tracking, behavior analysis, posture estimation, and non-modal incident review.
 
 The current application is person-only. It uses a YOLO person detector filtered to COCO class `0` and never displays or tracks luggage or other object classes.

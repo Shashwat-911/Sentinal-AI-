@@ -1,0 +1,22 @@
+{
+  "name": "sentinal-ai-playwright",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright browser regression tests and local workshop workflow",
+  "scripts": {
+    "test:e2e": "playwright test --project=chromium",
+    "test:e2e:all": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --project=chromium --headed",
+    "test:e2e:report": "playwright show-report",
+    "playwright:install": "playwright install chromium",
+    "playwright:serve": "node scripts/playwright-server.cjs",
+    "playwright:record": "playwright codegen http://127.0.0.1:9102"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
