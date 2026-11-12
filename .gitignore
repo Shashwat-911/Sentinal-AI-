@@ -55,8 +55,7 @@ Thumbs.db
 .local/
 evaluation/context_review/
 
-# Downloaded demo media (large local files; see demo_videos/MANIFEST.json)
-demo_videos/**/*.mp4
+# Downloaded demo media (tracked via Git LFS in .gitattributes; see demo_videos/MANIFEST.json)
 
 # Local incident and session reports
 incidents/reports/
