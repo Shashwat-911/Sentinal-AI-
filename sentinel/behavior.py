@@ -276,7 +276,6 @@ def evaluate_person_behavior(p_info, w, h, current_time=None):
         score += w_revisit * 0.30 * (revisit_count / max(1, revisit_thresh))
 
     suspicion_score = int(min(100, max(0, round(score))))
-    p_info["suspicion_score"] = suspicion_score
 
     # ── Target Level Determination ──
     crit_thresh = getattr(SentinelConfig, "SUSPICION_THRESH_CRITICAL", 85)
@@ -291,6 +290,11 @@ def evaluate_person_behavior(p_info, w, h, current_time=None):
         target_level = "OBSERVING"
     else:
         target_level = "NORMAL"
+
+    # Prevent pre-dwell movement warnings from exceeding MEDIUM tier
+    if not is_loitering:
+        suspicion_score = min(suspicion_score, 60 if target_level == "MEDIUM" else 33)
+    p_info["suspicion_score"] = suspicion_score
 
     # ── Temporal Stability & Hysteresis State Machine ──
     # Prevents 1-frame spikes from firing an alarm and prevents flickering

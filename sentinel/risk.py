@@ -7,45 +7,67 @@ from sentinel.detection import is_person
 from sentinel.behavior import evaluate_person_behavior
 
 
-def calculate_entity_risk(track, current_time=None):
+def _score_to_tier(score):
+    """Map numeric 0-100 risk score to (score, severity_label, BGR_color)."""
+    if score < 34:
+        return score, "LOW", (0, 200, 100)       # Green
+    elif score < 67:
+        return score, "MEDIUM", (0, 165, 255)    # Orange
+    elif score < 100:
+        return score, "HIGH", (0, 60, 255)       # Red-Orange
+    else:
+        return 100, "CRITICAL", (0, 0, 255)      # Pure Red
+
+
+def calculate_entity_risk(track, current_time=None, ai_context=None):
     """
     Calculate risk score (0-100), severity label, and HUD display color (BGR).
     Person-only risk scoring for dwell, movement, loitering, running, and safety events.
-    Supports explicit current_time for deterministic video-time evaluation.
+    When ai_context is provided, applies AI-weighted fusion (80% AI / 20% Rules) so
+    both HUD risk and context analysis align (never suppressing POSSIBLE_FALL).
     """
-    threats = track.get("active_threats", set())
-    if not threats or track.get("alert_dismissed", False):
+    if track.get("alert_dismissed", False):
         return 0, "NORMAL", (180, 180, 0)
 
-    max_score = 0
-    if is_person(track.get("class_name", "")):
+    threats = track.get("active_threats", set())
+    rule_score = 0
+    if threats and is_person(track.get("class_name", "")):
         pers_score = track.get("suspicion_score", 0)
-        max_score = max(max_score, pers_score)
+        rule_score = max(rule_score, pers_score)
 
         if "HIGH_CONFIDENCE_SUSPICIOUS" in threats or track.get("behavior_state") == "CRITICAL":
-            max_score = max(max_score, 100)  # CRITICAL
+            rule_score = max(rule_score, 100)  # CRITICAL
         elif "SUSPICIOUS_LOITERING" in threats or track.get("behavior_state") == "ALERT":
-            max_score = max(max_score, 75)   # HIGH
+            rule_score = max(rule_score, 75)   # HIGH
         elif "LOITERING" in threats:
-            max_score = max(max_score, 50)   # Backward-compatible baseline
+            rule_score = max(rule_score, 50)   # Backward-compatible baseline
         elif "SUDDEN_RUNNING" in threats:
-            max_score = max(max_score, 65)   # HIGH
+            rule_score = max(rule_score, 65)   # HIGH
         elif "REPEATED_MOVEMENT" in threats:
-            max_score = max(max_score, 45)   # MEDIUM
+            rule_score = max(rule_score, 45)   # MEDIUM
         elif "LONG_DWELL" in threats:
-            max_score = max(max_score, 25)   # LOW
+            rule_score = max(rule_score, 25)   # LOW
         elif "POSSIBLE_FALL" in threats:
-            max_score = max(max_score, 50)   # MEDIUM safety event
+            rule_score = max(rule_score, 50)   # MEDIUM safety event
 
-    # 4-Tier Risk Escalation
-    if max_score < 34:
-        return max_score, "LOW", (0, 200, 100)       # Green
-    elif max_score < 67:
-        return max_score, "MEDIUM", (0, 165, 255)    # Orange
-    elif max_score < 100:
-        return max_score, "HIGH", (0, 60, 255)       # Red-Orange
-    else:
-        return 100, "CRITICAL", (0, 0, 255)          # Pure Red
+    ai_cls = (ai_context or {}).get("classification")
+    if ai_cls and "POSSIBLE_FALL" not in threats and is_person(track.get("class_name", "")):
+        if ai_cls == "not_suspicious":
+            weighted_score = round(0.20 * rule_score)
+            if weighted_score < 25:
+                return weighted_score, "NORMAL", (0, 255, 136)
+            return weighted_score, "LOW", (0, 200, 100)
+        elif ai_cls == "suspicious":
+            ai_risk = 100 if rule_score >= 75 else 85
+            weighted_score = min(100, round(0.80 * ai_risk + 0.20 * rule_score))
+            return _score_to_tier(weighted_score)
+        elif ai_cls == "safety_concern":
+            return 100, "CRITICAL", (0, 0, 255)
+
+    if not threats:
+        return 0, "NORMAL", (180, 180, 0)
+
+    return _score_to_tier(rule_score)
 
 
 def analyze_behaviors(tracked_entities, w, h, current_time=None):

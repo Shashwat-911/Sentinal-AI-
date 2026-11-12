@@ -1,0 +1,10 @@
+[
+  {"file":"context_safety/Arrest002_x264.mp4","start":8,"end":14,"review":"Two people in physical contact, one low to the ground"},
+  {"file":"suspicious/Vandalism007_x264.mp4","start":14,"end":18,"review":"Inspect actual hand/body interaction near car; no car entry is visible"},
+  {"file":"suspicious/Burglary005_x264.mp4","start":154,"end":162,"review":"Doorway contact sequence; distinguish forceful action from ordinary entry"},
+  {"file":"suspicious/Burglary017_x264.mp4","start":4,"end":12,"review":"Person moves body across counter; permission remains unknown"},
+  {"file":"context_safety/RoadAccidents004_x264.mp4","start":3,"end":7,"review":"Inspect vehicle trajectories/contact; do not invent static entangled cars"},
+  {"file":"suspicious/Stealing036_x264.mp4","start":32,"end":40,"review":"Inspect pedestrian contact/object transfer; ownership is not visible"},
+  {"file":"suspicious/Shoplifting001_x264.mp4","start":52,"end":60,"review":"Inspect merchandise handling; distinguish visible concealment from ordinary shopping"},
+  {"file":"normal/Normal_Videos_014_x264.mp4","start":0,"end":8,"review":"Ordinary counter transaction; check false suspicion from object handling"}
+]

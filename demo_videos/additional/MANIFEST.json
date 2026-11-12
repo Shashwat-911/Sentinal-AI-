@@ -1,0 +1,127 @@
+{
+  "source": "Pixabay community stock videos",
+  "license_summary": "Free use and adaptation permitted under Pixabay Content License; avoid distributing standalone and check third-party rights.",
+  "note": "Supplementary demo clips, not verified CCTV ground truth. use labels below are suggested demo contexts, not dataset labels or truth claims.",
+  "files": [
+    {
+      "file": "pixabay_thief_car_3582.mp4",
+      "title": "Thief, bag, car",
+      "creator": "Pexels",
+      "use": "suspicious_like",
+      "notes": "Stock staged scene; not a verified real incident or CCTV benchmark.",
+      "path": "pixabay_thief_car_3582.mp4",
+      "bytes": 5062138,
+      "license": "Pixabay Content License",
+      "source_page": "https://pixabay.com/videos/thief-bag-car-stealing-criminal-3582/",
+      "download_url": "https://cdn.pixabay.com/video/2016/06/27/3582-172488198_large.mp4"
+    },
+    {
+      "file": "pixabay_street_crowd_1694.mp4",
+      "title": "Street, walking, crowd",
+      "creator": "Activedia",
+      "use": "normal_context",
+      "notes": "Busy pedestrian street scene; stock footage.",
+      "path": "pixabay_street_crowd_1694.mp4",
+      "bytes": 11067369,
+      "license": "Pixabay Content License",
+      "source_page": "https://pixabay.com/videos/street-walking-crowd-people-urban-1694/",
+      "download_url": "https://cdn.pixabay.com/video/2015/12/18/1694-149530466_large.mp4"
+    },
+    {
+      "file": "pixabay_city_walk_31822.mp4",
+      "title": "Street, walking, city",
+      "creator": "FeDesafiante",
+      "use": "normal_context",
+      "notes": "City pedestrian scene; stock footage.",
+      "path": "pixabay_city_walk_31822.mp4",
+      "bytes": 13121081,
+      "license": "Pixabay Content License",
+      "source_page": "https://pixabay.com/videos/street-walking-city-people-urban-31822/",
+      "download_url": "https://cdn.pixabay.com/video/2020/01/31/31822-389009323_large.mp4"
+    },
+    {
+      "file": "pixabay_urban_walk_30667.mp4",
+      "title": "Urban, walk, street",
+      "creator": "AbraxasFilms",
+      "use": "normal_context",
+      "notes": "Urban pedestrian scene; stock footage.",
+      "path": "pixabay_urban_walk_30667.mp4",
+      "bytes": 4983574,
+      "license": "Pixabay Content License",
+      "source_page": "https://pixabay.com/videos/urban-walk-street-walking-people-30667/",
+      "download_url": "https://cdn.pixabay.com/video/2019/12/30/30667-382777753_large.mp4"
+    },
+    {
+      "file": "pixabay_night_walk_331127.mp4",
+      "title": "Dark, night, walk",
+      "creator": "samsabt",
+      "use": "ambiguous_context",
+      "notes": "Night-walking stock scene; visual darkness does not establish suspicious intent.",
+      "path": "pixabay_night_walk_331127.mp4",
+      "bytes": 3616366,
+      "license": "Pixabay Content License",
+      "source_page": "https://pixabay.com/videos/dark-night-walk-331127/",
+      "download_url": "https://cdn.pixabay.com/video/2026/01/29/331127_large.mp4"
+    },
+    {
+      "file": "pixabay_parking_man_85427.mp4",
+      "title": "Man, parking lot, building",
+      "creator": "josalem",
+      "use": "ambiguous_context",
+      "notes": "Parking-lot scene; stock footage.",
+      "path": "pixabay_parking_man_85427.mp4",
+      "bytes": 3548054,
+      "license": "Pixabay Content License",
+      "source_page": "https://pixabay.com/videos/man-parking-lot-building-basement-85427/",
+      "download_url": "https://cdn.pixabay.com/video/2021/08/17/85427-588675539_large.mp4"
+    },
+    {
+      "file": "pixabay_mall_crowd_6387.mp4",
+      "title": "People, commerce, shop",
+      "creator": "Coverr-Free-Footage",
+      "use": "normal_context",
+      "notes": "Busy mall pedestrian scene; stock footage.",
+      "path": "pixabay_mall_crowd_6387.mp4",
+      "bytes": 7572120,
+      "license": "Pixabay Content License",
+      "source_page": "https://pixabay.com/videos/people-commerce-shop-busy-mall-6387/",
+      "download_url": "https://cdn.pixabay.com/video/2016/11/15/6387-191695740_large.mp4"
+    },
+    {
+      "file": "pixabay_argument_50312.mp4",
+      "title": "Couple, arguing, fight",
+      "creator": "DtheDelinquent",
+      "use": "suspicious_like",
+      "notes": "Staged argument/conflict scene; an argument is not proof of crime.",
+      "path": "pixabay_argument_50312.mp4",
+      "bytes": 15355303,
+      "license": "Pixabay Content License",
+      "source_page": "https://pixabay.com/videos/couple-arguing-fight-fighting-50312/",
+      "download_url": "https://cdn.pixabay.com/video/2020/09/19/50312-460401327_large.mp4"
+    },
+    {
+      "file": "pixabay_ai_car_wreck_302857.mp4",
+      "title": "Car, wreck, accident",
+      "creator": "Pixvault",
+      "use": "safety_synthetic",
+      "notes": "Pixabay marks this clip AI-generated; do not treat as authentic CCTV evidence.",
+      "path": "pixabay_ai_car_wreck_302857.mp4",
+      "bytes": 21913968,
+      "license": "Pixabay Content License",
+      "source_page": "https://pixabay.com/videos/car-wreck-accident-night-highway-302857/",
+      "download_url": "https://cdn.pixabay.com/video/2025/09/09/302857_large.mp4"
+    },
+    {
+      "file": "pixabay_crosswalk_crowd_3630.mp4",
+      "title": "Crosswalk, crowd, people",
+      "creator": "Coverr-Free-Footage",
+      "use": "normal_context",
+      "notes": "Crosswalk pedestrian scene; stock footage.",
+      "path": "pixabay_crosswalk_crowd_3630.mp4",
+      "bytes": 8584680,
+      "license": "Pixabay Content License",
+      "source_page": "https://pixabay.com/videos/crosswalk-crowd-people-many-3630/",
+      "download_url": "https://cdn.pixabay.com/video/2016/06/27/3630-172488409_large.mp4"
+    }
+  ]
+}

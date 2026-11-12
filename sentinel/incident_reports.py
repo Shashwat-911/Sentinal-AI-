@@ -7,6 +7,24 @@ from pathlib import Path
 REPORT_DIR = Path(__file__).resolve().parent.parent / "incidents" / "reports"
 
 
+def session_review_summary(reports, limit=6):
+    """Keep earlier review flags visible when the final window is ordinary/empty."""
+    flagged = [item for item in reports if item['assessment']['classification'] in ('suspicious', 'safety_concern')]
+    if not flagged:
+        return 'SESSION REVIEW: No review flags in assessed windows; unsampled actions may be missed.'
+    lines = [f'SESSION REVIEW: {len(flagged)} assessed window(s) flagged for review.',
+             'Later ordinary activity does not clear earlier flags. These are model interpretations.']
+    for item in flagged[-limit:]:
+        report = item['assessment']
+        summary = report['behavior_summary'].replace('\n', ' ')
+        if len(summary) > 180:
+            summary = summary[:177] + '...'
+        lines.append(f"• Through {item['timestamp']:.1f}s · {report['classification'].replace('_', ' ')}: {summary}")
+    if len(flagged) > limit:
+        lines.append(f'{len(flagged)-limit} earlier flagged windows retained in the session JSON.')
+    return '\n'.join(lines)
+
+
 def persist(incident, directory=REPORT_DIR):
     directory.mkdir(parents=True, exist_ok=True)
     incident.setdefault("report_key", uuid.uuid4().hex)

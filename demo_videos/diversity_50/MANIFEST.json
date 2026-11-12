@@ -1,0 +1,506 @@
+{
+  "source": "UCF-Crime via Hugging Face mteb mirror",
+  "note": "Dataset categories are not per-frame verified classifications. Download and opening-frame validation only.",
+  "files": [
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_048_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_048_x264.mp4",
+      "bytes": 9426636,
+      "sha256": "0a935f6935292455e89863c42a11bc9c0f9476383656ee17dc325aacab65ad7c",
+      "duration_seconds": 55.0,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_217_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_217_x264.mp4",
+      "bytes": 13371912,
+      "sha256": "73684bf2ee4e9c825c0a019e245a7bf94208ac8c9e2a3a20e995e3ceddbefa93",
+      "duration_seconds": 60.56666666666667,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_317_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_317_x264.mp4",
+      "bytes": 8176693,
+      "sha256": "6553a5dccbf2ef2463b6c52e4cf5b331869ef101789deae096592aaf76af5315",
+      "duration_seconds": 30.966666666666665,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_015_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_015_x264.mp4",
+      "bytes": 2895415,
+      "sha256": "69e5edb4b88a6f6db47b34b4d42df99b91a9bb35824a57e068c0426c06643b99",
+      "duration_seconds": 16.0,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_129_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_129_x264.mp4",
+      "bytes": 3736953,
+      "sha256": "d0700dd8b538ca372154a9b1d7701930c6301aa9f223be77da998188c06c5b81",
+      "duration_seconds": 15.566666666666666,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_453_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_453_x264.mp4",
+      "bytes": 44955718,
+      "sha256": "b3a8d8050c5f5b2dbff6d1f4d2429dd320966b9f32d157fa63c029caeb96dd0c",
+      "duration_seconds": 177.4,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_745_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_745_x264.mp4",
+      "bytes": 1914663,
+      "sha256": "a9d0e325e988b2dba2b7eb62a20eb5c0ad217bf93a2f2c040148f15a51174bb5",
+      "duration_seconds": 10.166666666666666,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_828_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_828_x264.mp4",
+      "bytes": 7684429,
+      "sha256": "c0b79e890556d96415e2fac47b66e4cd58c75d96fe9b3e859224c9d068bab3a5",
+      "duration_seconds": 31.0,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_656_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_656_x264.mp4",
+      "bytes": 11775783,
+      "sha256": "0413cad9f3cf371a83231a28e875cc874181392077e48b7a7b1836307c56a6b8",
+      "duration_seconds": 60.5,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_873_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_873_x264.mp4",
+      "bytes": 10079483,
+      "sha256": "2bf7944ec7ef38b31fd155fb0f8aba8903ef0bc7dbfd53a95c5622fa2a4b4889",
+      "duration_seconds": 59.96666666666667,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_882_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_882_x264.mp4",
+      "bytes": 13711043,
+      "sha256": "5aa59a4c60eef0caa0e7547ea3b82f041d9de1d331b6c5c5eb23aefc340c3cbf",
+      "duration_seconds": 55.13333333333333,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_909_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_909_x264.mp4",
+      "bytes": 7080471,
+      "sha256": "58083612c300ed705b987bac5ff8590c74b7903fc80190e982dde401246036f8",
+      "duration_seconds": 29.0,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_900_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_900_x264.mp4",
+      "bytes": 12175753,
+      "sha256": "b773a5868ccbc5f4db76508e3a9869578c9c9c8767ee8c18af7141fe9ae5772c",
+      "duration_seconds": 48.5,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_934_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_934_x264.mp4",
+      "bytes": 14421759,
+      "sha256": "1e59d8998e4b060d139a481c8fc043c4854c97977755e8277bdc6b1798fd4dc9",
+      "duration_seconds": 58.833333333333336,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_891_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_891_x264.mp4",
+      "bytes": 14335311,
+      "sha256": "386ffd849c01a0604427a63b4e1d21227a6e86722c06d5cd063b02de08e4b020",
+      "duration_seconds": 60.0,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Burglary\\Burglary001_x264.mp4",
+      "category": "Burglary",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Burglary/Burglary001_x264.mp4",
+      "bytes": 29617108,
+      "sha256": "4a7c6d82ff41062ff855e24ea2abd98e7f5d7c5a0ce9d342a249dc0b70372a0a",
+      "duration_seconds": 132.3,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Burglary\\Burglary035_x264.mp4",
+      "category": "Burglary",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Burglary/Burglary035_x264.mp4",
+      "bytes": 15183310,
+      "sha256": "8ee9b915be58a30c60bc8981f0d4baeac45929724f07d573ec354defdc1070d0",
+      "duration_seconds": 135.0,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Burglary\\Burglary068_x264.mp4",
+      "category": "Burglary",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Burglary/Burglary068_x264.mp4",
+      "bytes": 4103130,
+      "sha256": "7e7c5bfe72462aaec5d460466f1c56c8592cd232beea7e7f93291cd7c683da38",
+      "duration_seconds": 22.133333333333333,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_944_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_944_x264.mp4",
+      "bytes": 50599367,
+      "sha256": "67cb58f568f10eec12b82b9739268578104fdc1e246d615504d6499a42ea2488",
+      "duration_seconds": 239.0,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Burglary\\Burglary100_x264.mp4",
+      "category": "Burglary",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Burglary/Burglary100_x264.mp4",
+      "bytes": 35443867,
+      "sha256": "0ef16d392f921ec41a9b9928b36b681a52731ff3c0b15c8bb412b262a940f0af",
+      "duration_seconds": 246.83333333333334,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Testing_Normal\\Normal_Videos_925_x264.mp4",
+      "category": "Testing_Normal",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Testing_Normal/Normal_Videos_925_x264.mp4",
+      "bytes": 65516331,
+      "sha256": "1147d9ecdccb5846eec2e3e3c65228e5940738bde43dac0452791b936a4acd86",
+      "duration_seconds": 257.53333333333336,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Shoplifting\\Shoplifting038_x264.mp4",
+      "category": "Shoplifting",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Shoplifting/Shoplifting038_x264.mp4",
+      "bytes": 18713624,
+      "sha256": "ae9ed0e500ec21323144d616baa7f1550e871a7276d2c8145b9489ce0e31b540",
+      "duration_seconds": 96.8,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Shoplifting\\Shoplifting003_x264.mp4",
+      "category": "Shoplifting",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Shoplifting/Shoplifting003_x264.mp4",
+      "bytes": 90724415,
+      "sha256": "f1b14434430832e036c9b43ce979e457913ac50649d2a3bcff7be94c385c4654",
+      "duration_seconds": 360.56666666666666,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Stealing\\Stealing002_x264.mp4",
+      "category": "Stealing",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Stealing/Stealing002_x264.mp4",
+      "bytes": 15233758,
+      "sha256": "88acfce0d4442084f313e9a6537d93b49567a83f5c1756ccaf5ca21d9d6d455b",
+      "duration_seconds": 117.23333333333333,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Shoplifting\\Shoplifting020_x264.mp4",
+      "category": "Shoplifting",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Shoplifting/Shoplifting020_x264.mp4",
+      "bytes": 46703722,
+      "sha256": "5a638d09944343ac94839ebe5122ae359d07790102e43ce9377ce5c07685753f",
+      "duration_seconds": 192.33333333333334,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Shoplifting\\Shoplifting055_x264.mp4",
+      "category": "Shoplifting",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Shoplifting/Shoplifting055_x264.mp4",
+      "bytes": 54165484,
+      "sha256": "16d7af598f5d1ef87a90d443a05d3d8db22876e87d986cfb1b5623939263b90e",
+      "duration_seconds": 225.66666666666666,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Stealing\\Stealing078_x264.mp4",
+      "category": "Stealing",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Stealing/Stealing078_x264.mp4",
+      "bytes": 13340306,
+      "sha256": "6762d6ff023ad360dac9e51c8a1c493dc750e8cd3b7c0de414d0eb63d8bb12f0",
+      "duration_seconds": 86.2,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Stealing\\Stealing114_x264.mp4",
+      "category": "Stealing",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Stealing/Stealing114_x264.mp4",
+      "bytes": 5474813,
+      "sha256": "524b02e33e53e8db7c2d9a86da0f2264c9de8557fdc35d4cd4aab173a23b71d5",
+      "duration_seconds": 40.56666666666667,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Vandalism\\Vandalism001_x264.mp4",
+      "category": "Vandalism",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Vandalism/Vandalism001_x264.mp4",
+      "bytes": 12613784,
+      "sha256": "5a99f2fefb3343c05f2a782f3b2def137e7ac5365355e44084a409abd27f3402",
+      "duration_seconds": 47.8,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Stealing\\Stealing043_x264.mp4",
+      "category": "Stealing",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Stealing/Stealing043_x264.mp4",
+      "bytes": 17104598,
+      "sha256": "6c3794916ff170e959e0658617cb94c69e08ba915842a4667ff5d9fe037ffead",
+      "duration_seconds": 160.43333333333334,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Vandalism\\Vandalism026_x264.mp4",
+      "category": "Vandalism",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Vandalism/Vandalism026_x264.mp4",
+      "bytes": 2801880,
+      "sha256": "1ff69651dbb0a48909df0dfeded7c1777f51a3784c9da0b2a832566885f40e74",
+      "duration_seconds": 32.3,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Vandalism\\Vandalism050_x264.mp4",
+      "category": "Vandalism",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Vandalism/Vandalism050_x264.mp4",
+      "bytes": 7327172,
+      "sha256": "d87544a73848e9a4df52413230ccc29040363ad63648a9d4bece2a25cddaa16f",
+      "duration_seconds": 29.966666666666665,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Robbery\\Robbery001_x264.mp4",
+      "category": "Robbery",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Robbery/Robbery001_x264.mp4",
+      "bytes": 6139077,
+      "sha256": "79863df9313468698dfed1280834ac95d68d1b8463aad9fb6eb4655e80c436e0",
+      "duration_seconds": 32.9,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Robbery\\Robbery150_x264.mp4",
+      "category": "Robbery",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Robbery/Robbery150_x264.mp4",
+      "bytes": 9303812,
+      "sha256": "d7893457cb4e11d0817bee40fae19eb0bf040f449e9e7be7db35108edf3fc2a1",
+      "duration_seconds": 123.53333333333333,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\RoadAccidents\\RoadAccidents033_x264.mp4",
+      "category": "RoadAccidents",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/RoadAccidents/RoadAccidents033_x264.mp4",
+      "bytes": 4531003,
+      "sha256": "c10535b6a0795b1e55292cd4a8a32febd808ffb0f730ca2e36f3b7168c887b66",
+      "duration_seconds": 19.566666666666666,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\RoadAccidents\\RoadAccidents003_x264.mp4",
+      "category": "RoadAccidents",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/RoadAccidents/RoadAccidents003_x264.mp4",
+      "bytes": 12180288,
+      "sha256": "8489c11485e88449b8454576b92991f79e669e554e9e1c610b3e2ee69c9aea45",
+      "duration_seconds": 49.43333333333333,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\RoadAccidents\\RoadAccidents063_x264.mp4",
+      "category": "RoadAccidents",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/RoadAccidents/RoadAccidents063_x264.mp4",
+      "bytes": 29835733,
+      "sha256": "87884ed8ac722a87d4ddf1ee4a496495d0ab423e1e38f1c87170713506b99e38",
+      "duration_seconds": 117.2,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\RoadAccidents\\RoadAccidents122_x264.mp4",
+      "category": "RoadAccidents",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/RoadAccidents/RoadAccidents122_x264.mp4",
+      "bytes": 4347913,
+      "sha256": "a8906759f63af661026066cc6795571d3b5695acf8ddb2d65ff91f08039da6f7",
+      "duration_seconds": 21.566666666666666,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\RoadAccidents\\RoadAccidents151_x264.mp4",
+      "category": "RoadAccidents",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/RoadAccidents/RoadAccidents151_x264.mp4",
+      "bytes": 7365439,
+      "sha256": "50e8aeb6a7ee1d16a9b3f8ef6dfceeea2ce05ebc6d934dd23af3dfd2db322544",
+      "duration_seconds": 28.066666666666666,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Arrest\\Arrest001_x264.mp4",
+      "category": "Arrest",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Arrest/Arrest001_x264.mp4",
+      "bytes": 13982812,
+      "sha256": "1538201f621a24c2dabceafc88a0844598be5c2356e78e0e486915d3e4e1388a",
+      "duration_seconds": 79.13333333333334,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\RoadAccidents\\RoadAccidents093_x264.mp4",
+      "category": "RoadAccidents",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/RoadAccidents/RoadAccidents093_x264.mp4",
+      "bytes": 15759228,
+      "sha256": "a9fff4d95f24bdcffe00aef4c339dfda38daf3087d738b81aea6c14d9b868e93",
+      "duration_seconds": 59.96666666666667,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Fighting\\Fighting002_x264.mp4",
+      "category": "Fighting",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Fighting/Fighting002_x264.mp4",
+      "bytes": 16956492,
+      "sha256": "c1b32e3e549ca0b076e69f69ef564a40aef3cfe7e4d787b18b7ddd6a9e0b7b9c",
+      "duration_seconds": 89.6,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Arrest\\Arrest027_x264.mp4",
+      "category": "Arrest",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Arrest/Arrest027_x264.mp4",
+      "bytes": 14225246,
+      "sha256": "c6821bc81d197e62b32e236b3f717f71ad6b804fdb42734ba506b9a80169f7db",
+      "duration_seconds": 56.93333333333333,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Fighting\\Fighting026_x264.mp4",
+      "category": "Fighting",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Fighting/Fighting026_x264.mp4",
+      "bytes": 16126352,
+      "sha256": "830ca909f4b555dac8c34177452903853cb4cffccd63371bdf5c934642274656",
+      "duration_seconds": 116.7,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Arrest\\Arrest051_x264.mp4",
+      "category": "Arrest",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Arrest/Arrest051_x264.mp4",
+      "bytes": 91839785,
+      "sha256": "4a528ff34c8f7651263d17d44f64086b1c073dfcb4a7412aeff33f2388516113",
+      "duration_seconds": 360.0,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Assault\\Assault001_x264.mp4",
+      "category": "Assault",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Assault/Assault001_x264.mp4",
+      "bytes": 21066405,
+      "sha256": "3b83cf948fef884ede2b86a2d3fe68de779b9c81301a5c653fbb329bfc243274",
+      "duration_seconds": 82.86666666666666,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Assault\\Assault052_x264.mp4",
+      "category": "Assault",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Assault/Assault052_x264.mp4",
+      "bytes": 5090465,
+      "sha256": "efb5fa4e40460752a1ea0df8a682ef8101eeeeb189e63148a3854b8c4d68f570",
+      "duration_seconds": 26.3,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Fighting\\Fighting051_x264.mp4",
+      "category": "Fighting",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Fighting/Fighting051_x264.mp4",
+      "bytes": 54988600,
+      "sha256": "10d47fc4786c5d3ad01c85357c65c3e47c64d012d06c29eec5f6d8b2f9a85d14",
+      "duration_seconds": 220.26666666666668,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Arson\\Arson001_x264.mp4",
+      "category": "Arson",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Arson/Arson001_x264.mp4",
+      "bytes": 29013622,
+      "sha256": "8d4a53c04863dd1476be3ac5f836e4246488af3e3560c649e15086f99d69a7f7",
+      "duration_seconds": 139.56666666666666,
+      "width": 320,
+      "height": 240
+    },
+    {
+      "file": "demo_videos\\diversity_50\\Arson\\Arson053_x264.mp4",
+      "category": "Arson",
+      "source": "https://huggingface.co/datasets/mteb/ucf-crime/resolve/main/videos/Arson/Arson053_x264.mp4",
+      "bytes": 58536952,
+      "sha256": "4052b6d505e5e0b1fe6376a424f30ff292d0053020bebf4de9b548c4790059c0",
+      "duration_seconds": 225.83333333333334,
+      "width": 320,
+      "height": 240
+    }
+  ]
+}

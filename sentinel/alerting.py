@@ -11,7 +11,7 @@ from sentinel.detection import is_person
 from sentinel.risk import calculate_entity_risk, analyze_behaviors
 
 
-def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
+def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None, ai_context=None, run_behavior=True):
     """
     Draw bounding boxes, posture skeletons, threat overlays, and Cyber-HUD.
     Returns (annotated_frame, list_of_new_alerts).
@@ -19,14 +19,19 @@ def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
     Args:
         current_time: Optional. If None, uses wall-clock time (for real-time camera).
                       If provided, uses the given time (for video-time testing).
+        ai_context: Optional dict with latest AI classification ("not_suspicious",
+                    "suspicious", "safety_concern", "uncertain") to align HUD with AI.
+        run_behavior: Whether to advance behavior analysis on this call.
     """
     h, w = frame.shape[:2]
     if current_time is None:
         current_time = time.time()
     new_alerts = []
+    ai_cls = (ai_context or {}).get("classification")
 
     # Run behavior and risk analysis
-    analyze_behaviors(tracked_entities, w, h, current_time)
+    if run_behavior:
+        analyze_behaviors(tracked_entities, w, h, current_time)
 
     # 1. Draw Bounding Boxes, Posture Skeletons, and Status Badges
     for key, info in tracked_entities.items():
@@ -45,9 +50,13 @@ def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
             from sentinel.posture import draw_pose_skeleton
             draw_pose_skeleton(frame, info["keypoints"], info.get("posture", "UNKNOWN"))
 
-        risk_score, severity, color = calculate_entity_risk(info, current_time)
+        risk_score, severity, color = calculate_entity_risk(info, current_time, ai_context=ai_context)
         info["risk_score"] = risk_score
         info["severity"] = severity
+
+        threats = info.get("active_threats", set())
+        has_fall = "POSSIBLE_FALL" in threats
+        ai_cleared = (ai_cls == "not_suspicious" and not has_fall)
 
         # Flashing for critical security threats
         if severity == "CRITICAL" and (frame_count // 8) % 2 == 0:
@@ -68,12 +77,19 @@ def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
         pose_conf = int(info.get("pose_confidence", 0.0) * 100)
         b_state = info.get("behavior_state", severity)
 
-        behaviour_label = {
-            "ALERT": "SUSPICIOUS",
-            "CRITICAL": "SUSPICIOUS",
-            "HIGH": "SUSPICIOUS",
-            "COOLING_DOWN": "COOLING",
-        }.get(str(b_state), str(b_state))
+        if ai_cleared:
+            behaviour_label = "NORMAL (AI)"
+        elif ai_cls == "suspicious":
+            behaviour_label = "SUSPICIOUS"
+        elif ai_cls == "safety_concern":
+            behaviour_label = "SAFETY CONCERN"
+        else:
+            behaviour_label = {
+                "ALERT": "SUSPICIOUS",
+                "CRITICAL": "SUSPICIOUS",
+                "HIGH": "SUSPICIOUS",
+                "COOLING_DOWN": "COOLING",
+            }.get(str(b_state), str(b_state))
         label = f"PERSON #{track_id} | {behaviour_label} | Risk: {severity}"
         sub_label = (
             f"Posture: {posture} ({pose_conf}%) | Dwell: {dwell}s | "
@@ -94,9 +110,15 @@ def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.32, (200, 200, 200), 1)
             badge_y += sth + 8
 
-        # Render active threats badge below bounding box
-        threats = info.get("active_threats", set())
-        if threats:
+        # Render active threats badge below bounding box (suppressed when AI cleared scene as benign)
+        effective_threats = ({"POSSIBLE_FALL"} if has_fall else set()) if ai_cleared else set(threats)
+        if not effective_threats and ai_cls in ("suspicious", "safety_concern"):
+            ai_badge = "⚠ AI: SAFETY CONCERN" if ai_cls == "safety_concern" else "⚠ AI: SUSPICIOUS CONTEXT"
+            (ttw, tth), _ = cv2.getTextSize(ai_badge, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)
+            cv2.rectangle(frame, (x1, badge_y), (x1 + ttw + 6, badge_y + tth + 8), (0, 0, 0), -1)
+            cv2.putText(frame, ai_badge, (x1 + 3, badge_y + tth + 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
+        elif effective_threats:
             threat_display_map = {
                 "POSSIBLE_FALL": "⚠ POSSIBLE FALL / ASSISTANCE REQUIRED",
                 "LONG_DWELL": "⚠ LONG DWELL",
@@ -107,7 +129,7 @@ def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
                 "SUDDEN_RUNNING": "⚠ SUDDEN RUNNING",
             }
             # Avoid displaying redundant aliases
-            display_threats = [t for t in threats if not (t == "LOITERING" and "SUSPICIOUS_LOITERING" in threats)]
+            display_threats = [t for t in effective_threats if not (t == "LOITERING" and "SUSPICIOUS_LOITERING" in effective_threats)]
             threat_str = " | ".join(threat_display_map.get(t, t) for t in display_threats)
             (ttw, tth), _ = cv2.getTextSize(threat_str, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)
             cv2.rectangle(frame, (x1, badge_y), (x1 + ttw + 6, badge_y + tth + 8), (0, 0, 0), -1)
@@ -116,8 +138,8 @@ def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
 
             # Fire alerts with per-behaviour cooldown
             last_alert_times = info.setdefault("last_alert_times", {})
-            for t in threats:
-                if t == "LOITERING" and "SUSPICIOUS_LOITERING" in threats:
+            for t in effective_threats:
+                if t == "LOITERING" and "SUSPICIOUS_LOITERING" in effective_threats:
                     continue  # suppress duplicate alias alert
 
                 last_alert = last_alert_times.get(t, info.get("last_alert_time", 0.0))
@@ -144,21 +166,27 @@ def draw_overlays(frame, tracked_entities, frame_count=0, current_time=None):
                         )
                     })
 
-    # 3. Draw Flashing Alarm Banner for Active Threats
+    # 3. Draw Flashing Alarm Banner for Active Threats (aligned with AI context)
     active_threat_items = [
         info for info in tracked_entities.values()
-        if info.get("active_threats") and not info.get("alert_dismissed")
+        if not info.get("alert_dismissed") and info.get("missed_frames", 0) <= 5 and (
+            ("POSSIBLE_FALL" in info.get("active_threats", set()))
+            or (ai_cls != "not_suspicious" and (info.get("active_threats") or ai_cls in ("suspicious", "safety_concern")))
+        )
     ]
     if active_threat_items:
         overlay = frame.copy()
         cv2.rectangle(overlay, (0, 0), (w, 36), (10, 0, 0), -1)
         frame = cv2.addWeighted(overlay, 0.85, frame, 0.15, 0)
 
-        banner_text = " \u26A0 ALERT: " + " | ".join(
-            f"PERSON#{i['track_id']} ({','.join(t for t in i['active_threats'] if t != 'LOITERING') or 'ALERT'})"
-            for i in active_threat_items[:2]
-            if is_person(i.get("class_name", ""))
-        )[:70] + " — SECURITY ATTENTION REQUIRED"
+        parts = []
+        for i in active_threat_items[:2]:
+            if is_person(i.get("class_name", "")):
+                t_labels = [t for t in i.get("active_threats", set()) if t != "LOITERING"]
+                if not t_labels and ai_cls in ("suspicious", "safety_concern"):
+                    t_labels = [f"AI_{ai_cls.upper()}"]
+                parts.append(f"PERSON#{i['track_id']} ({','.join(t_labels) or 'ALERT'})")
+        banner_text = (" \u26A0 ALERT: " + " | ".join(parts))[:70] + " — SECURITY ATTENTION REQUIRED"
         cv2.putText(frame, banner_text, (10, 24),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.42, (60, 60, 255), 2)
     return frame, new_alerts

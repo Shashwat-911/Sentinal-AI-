@@ -5,6 +5,7 @@ import json
 from sentinel.incident_reports import HypothesisHistory, matches, persist, REPORT_DIR
 
 import queue
+from sentinel.incident_reports import session_review_summary
 import time
 import tkinter as tk
 from tkinter import ttk
@@ -25,6 +26,7 @@ class ContextUI:
         self.context_session_errors = []
         self.context_failed = False
         self.context_finished_stamp = None
+        self.ai_context_verdict = None
         self.context_settings = {"enabled": True, "scene": "Unknown (infer visible surroundings)",
                                  "recording_start": "", "expected": "Unknown", "usual_hours": "", "model": MODEL}
         self.context_enabled = tk.BooleanVar(value=True)
@@ -141,10 +143,25 @@ class ContextUI:
         self.context_session_errors = []
         self.context_failed = False
         self.context_finished_stamp = None
+        self.ai_context_verdict = None
         self.context_generation = self.context_engine.reset()
         self.context_status.set("Collecting fresh evidence..." if self.context_settings["enabled"] else "Context analysis disabled")
         self._set_text(self.context_text, "Waiting for new evidence. Previous assessment cleared.")
         self._sync_context_report()
+        self._on_ai_context_updated()
+
+    def _active_ai_context(self):
+        """Return latest AI context verdict if Smart Context is enabled for the active generation."""
+        verdict = getattr(self, "ai_context_verdict", None)
+        if not verdict or not getattr(self, "context_settings", {}).get("enabled", True):
+            return None
+        if verdict.get("generation") != getattr(self, "context_generation", None):
+            return None
+        return verdict
+
+    def _on_ai_context_updated(self):
+        """Hook overridden by SentinelApp to sync HUD and video overlay with latest AI verdict."""
+        pass
 
     def _observe_context(self, generation, source, timestamp, tracks, brightness, frame=None):
         # Called by the inference worker; never read or mutate Tk widgets here.
@@ -166,15 +183,27 @@ class ContextUI:
                             self._save_incident_report(incident)
                     self.context_session_errors.append({"timestamp": result["timestamp"], "error": result["error"]})
                     self.context_failed = True
-                    self.context_full_text = result["error"]
+                    self.context_full_text = session_review_summary(self.context_session_reports) + '\n\nLatest analysis error: ' + result["error"]
                     self._save_session_report()
                     self._set_text(self.context_text, result["error"] + "\n\nDetection continues. Start Ollama and ensure the selected model is installed (Environment settings).")
                     self._sync_context_report()
                     continue
                 self.context_failed = False
                 assessment = result["assessment"]
+                from sentinel.voting import classify_window
+                combined = classify_window(assessment, packet)
+                assessment['combined_decision'] = combined
+                verdict_cls = combined.get("classification") if combined.get("classification") in ("not_suspicious", "suspicious", "safety_concern") else assessment.get("classification")
+                self.ai_context_verdict = {
+                    "generation": self.context_generation,
+                    "classification": verdict_cls,
+                    "raw_ai": assessment.get("classification"),
+                    "combined": combined,
+                    "timestamp": result["timestamp"],
+                }
                 self.context_history.update(assessment, result["timestamp"])
-                self.context_session_reports.append({"timestamp": result["timestamp"], "assessment": assessment})
+                self.context_session_reports.append({"timestamp": result["timestamp"], "assessment": assessment,
+                    "packet": {key: value for key, value in packet.items() if key != 'images'}})
                 self.context_results.append(result)
                 self.context_results = self.context_results[-12:]
                 text = format_report(assessment, packet, result["timestamp"])
@@ -184,11 +213,12 @@ class ContextUI:
                     for p in packet["evidence"][-1]["people"])
                 if not packet["evidence"][-1]["people"]:
                     text += "No tracked person in the latest detector sample; visual review uses the sampled images."
-                self.context_full_text = text + "\n\n" + self.context_history.text()
+                self.context_full_text = session_review_summary(self.context_session_reports) + '\n\nLATEST WINDOW\n' + text + "\n\n" + self.context_history.text()
                 self._set_text(self.context_text, format_brief(assessment, packet, result["timestamp"]))
                 self._sync_context_report()
                 self._attach_context_to_incidents(result)
                 self._save_session_report()
+                self._on_ai_context_updated()
         except queue.Empty:
             pass
         busy = self.context_engine.busy
@@ -198,7 +228,7 @@ class ContextUI:
             latest = self.context_results[-1]
             self.context_finished_stamp = latest["timestamp"]
             self._set_text(self.context_text, format_brief(latest["assessment"], latest["packet"], latest["timestamp"])
-                           + "\n\n" + self.context_history.text())
+                           + "\n\n" + session_review_summary(self.context_session_reports))
         if busy and busy[0] == self.context_generation:
             self.context_status.set(f"Local model analyzing ({time.monotonic() - busy[1]:.0f}s). Playback and analysis run independently.")
         self.root.after(100, self._poll_context)

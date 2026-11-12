@@ -49,9 +49,23 @@ The **Video Context · Local Vision** panel is beside the video, with the existi
 person IDs, skeleton overlay, confidence chart, target details, baseline risk and
 incident events retained. Only one camera/video source runs at a time.
 
-The added context feature defaults to local Ollama **qwen3.5:4b**, a vision-language model.
-Install it with `ollama pull qwen3.5:4b` and keep Ollama running on localhost:11434.
-The smaller `qwen3.5:2b` is selectable in **Environment** for faster responses.
+The added context feature defaults to local Ollama **qwen3-vl:4b-instruct**.
+Install it with `ollama pull qwen3-vl:4b-instruct` and keep Ollama running on localhost:11434.
+The previous `qwen3.5:4b` and smaller `qwen3.5:2b` remain selectable in **Environment**.
+`qwen3-vl:8b-instruct` is also selectable when installed. It is substantially slower
+on the tested laptop and has not demonstrated a reliable advantage over 4B.
+The default first describes the chronological images, then creates a validated report
+from that observation record. It uses two local requests; detailed analysis can take
+roughly a minute on a laptop, independently of playback.
+The report now requests visible observations before its classification. Playback
+remains independent of model processing. Context frames
+include temporal endpoints and a short burst around the strongest sampled visual change.
+Large view/illumination changes start a new evidence window rather than being treated
+as subject movement. Lighting appearance is separate from recording time, and animal-only scenes
+do not generate human task estimates. See [the scene review](QUALITY_SCENE_REVIEW.md)
+for reproducible checks and remaining limitations.
+See [the 15-video evaluation](QUALITY_15_VIDEO_REVIEW.md) for the broader follow-up,
+including missed events and false descriptions. Successful inference is not an accuracy guarantee.
 The older `qwen3:1.7b` text model may remain installed but is not used for visual context.
 
 - The model receives up to five chronological clean frames plus recent pose, speed,
@@ -79,6 +93,8 @@ The older `qwen3:1.7b` text model may remain installed but is not used for visua
   backlog. Results show the evidence timestamp, not a claim about the current frame.
 - Baseline risk calculations and their weights remain unchanged. Context is a separate
   review assessment; it does not erase fall alerts or override existing incidents.
+- Session summaries retain earlier flagged windows when later activity is ordinary.
+  Session JSON also saves each window's source observations and evidence timestamps.
 - Interpretation remains fallible, especially with blur, small objects or ambiguous
   actions. Valid JSON/evidence references do not establish factual correctness.
 - Images go only to the local Ollama endpoint, not a cloud API. Timeout/model errors

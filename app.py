@@ -124,6 +124,10 @@ class SentinelApp(ContextUI):
         self.loss_epochs = []
         self.map_epochs = []
         self._last_frame = None
+        self._last_vid_clean_frame = None
+        self._last_vid_frame_count = 0
+        self._last_vid_time = 0.0
+        self.ai_context_verdict = None
         self._alert_sound_active = False
         self._alert_sound_thread = None
         self.app_pages = {}
@@ -1380,7 +1384,8 @@ class SentinelApp(ContextUI):
                 # Preserve clean pixels before the overlay function mutates the frame.
                 raw_frame = frame.copy()
                 brightness = float(cv2.cvtColor(raw_frame[::16, ::16], cv2.COLOR_BGR2GRAY).mean())
-                annotated, alerts = draw_overlays(frame, tracked, frame_count, current_time=video_time)
+                ai_ctx = self._active_ai_context()
+                annotated, alerts = draw_overlays(frame, tracked, frame_count, current_time=video_time, ai_context=ai_ctx)
                 try:
                     self._observe_context(self.context_generation, "vid", video_time, tracked, brightness, raw_frame)
                 except Exception as exc:
@@ -1395,7 +1400,7 @@ class SentinelApp(ContextUI):
                     alert["video_seconds"] = video_time
                     alert["context_run"] = self.context_run
                     self.video_events.put((session, "alert", alert))
-                packet = dict(frame=annotated, tracks=copy.deepcopy(tracked), detections=person_dets,
+                packet = dict(frame=annotated, clean_frame=raw_frame, tracks=copy.deepcopy(tracked), detections=person_dets,
                               position=video_time, frame_count=frame_count,
                               fps=1.0 / max(time.perf_counter() - started, .001))
                 try:
@@ -1444,6 +1449,9 @@ class SentinelApp(ContextUI):
             session, packet = self.video_frames.get_nowait()
             if session == self.video_session:
                 self._last_frame = packet["frame"]
+                self._last_vid_clean_frame = packet.get("clean_frame")
+                self._last_vid_frame_count = packet["frame_count"]
+                self._last_vid_time = packet["position"]
                 self.vid_tracked_entities = packet["tracks"]
                 self.vid_fcount = packet["frame_count"]
                 self.video_position = packet["position"]
@@ -1470,6 +1478,8 @@ class SentinelApp(ContextUI):
         self.btn_vid_play.config(state="normal")
         self.btn_vid_stop.config(state="disabled")
         self._stop_alert_sound()
+        if getattr(self, "vid_tracked_entities", None):
+            self._update_hud_sidebar("vid", self.vid_tracked_entities)
         self._set_status(outcome, DANGER if outcome.startswith("Video error") else ACCENT)
 
     def _update_video_progress(self):
@@ -1695,7 +1705,8 @@ class SentinelApp(ContextUI):
                 context_brightness = float(cv2.cvtColor(frame[::16, ::16], cv2.COLOR_BGR2GRAY).mean())
                 # Behavior analysis and overlay drawing (renders skeleton and telemetry)
                 annotated, new_alerts = draw_overlays(
-                    frame, self.cam_tracked_entities, self.cam_fcount, current_time=frame_time
+                    frame, self.cam_tracked_entities, self.cam_fcount, current_time=frame_time,
+                    ai_context=self._active_ai_context()
                 )
                 new_alerts = fall_alerts + new_alerts
                 self._last_frame = annotated.copy()
@@ -1847,6 +1858,8 @@ class SentinelApp(ContextUI):
             return
 
         # Build lines for each tracked entity
+        ai_ctx = self._active_ai_context()
+        ai_cls = (ai_ctx or {}).get("classification")
         for key, info in sorted(tracked_entities.items()):
             if info.get("alert_dismissed", False):
                 continue
@@ -1854,7 +1867,7 @@ class SentinelApp(ContextUI):
             cls_name = info["class_name"]
             track_id = info["track_id"]
             threats = info.get("active_threats", set())
-            risk_score, severity, color = calculate_entity_risk(info)
+            risk_score, severity, color = calculate_entity_risk(info, ai_context=ai_ctx)
 
             if is_person(cls_name):
                 dwell = int(info.get("dwell_time", 0))
@@ -1863,12 +1876,20 @@ class SentinelApp(ContextUI):
                 posture = info.get("posture", "UNKNOWN")
                 pose_conf = int(info.get("pose_confidence", 0.0) * 100)
                 b_state = str(info.get("behavior_state", "NORMAL"))
-                behaviour_label = {
-                    "ALERT": "SUSPICIOUS",
-                    "CRITICAL": "SUSPICIOUS",
-                    "HIGH": "SUSPICIOUS",
-                    "COOLING_DOWN": "COOLING",
-                }.get(b_state, b_state)
+                has_fall = "POSSIBLE_FALL" in threats
+                if ai_cls == "not_suspicious" and not has_fall:
+                    behaviour_label = "NORMAL (AI)"
+                elif ai_cls == "suspicious":
+                    behaviour_label = "SUSPICIOUS"
+                elif ai_cls == "safety_concern":
+                    behaviour_label = "SAFETY CONCERN"
+                else:
+                    behaviour_label = {
+                        "ALERT": "SUSPICIOUS",
+                        "CRITICAL": "SUSPICIOUS",
+                        "HIGH": "SUSPICIOUS",
+                        "COOLING_DOWN": "COOLING",
+                    }.get(b_state, b_state)
                 targets_text += (
                     f"PERSON #{track_id} | Posture: {posture} ({pose_conf}%)\n"
                     f"  Dwell: {dwell}s | Meander: {meander:.1f} | Revisits: {revisits}\n"
@@ -1900,6 +1921,24 @@ class SentinelApp(ContextUI):
 
         # Update HUD risk gauge panel
         risk_lbl.config(text=f"{global_severity} ({max_risk_score}%)", fg=hex_color)
+
+    def _on_ai_context_updated(self):
+        """Sync video overlay, active targets, and global risk meter with latest AI verdict."""
+        if getattr(self, "vid_tracked_entities", None):
+            self._update_hud_sidebar("vid", self.vid_tracked_entities)
+            if getattr(self, "_last_vid_clean_frame", None) is not None and not self.video_running:
+                annotated, _ = draw_overlays(
+                    self._last_vid_clean_frame.copy(),
+                    copy.deepcopy(self.vid_tracked_entities),
+                    self._last_vid_frame_count,
+                    current_time=self._last_vid_time,
+                    ai_context=self._active_ai_context(),
+                    run_behavior=False,
+                )
+                self._last_frame = annotated
+                self._show_frame(annotated, self.vid_canvas)
+        if getattr(self, "cam_tracked_entities", None):
+            self._update_hud_sidebar("cam", self.cam_tracked_entities)
 
     def _format_seconds(self, seconds):
         seconds = max(0, int(seconds or 0))

@@ -1,0 +1,17 @@
+[
+  {"file":"context_safety/RoadAccidents002_x264.mp4","start":0,"end":11.5,"review":"Vehicle leaves road and hits pedestrian area; safety review required"},
+  {"file":"context_safety/RoadAccidents004_x264.mp4","start":0,"end":12.9,"review":"Vehicles converge and collide in junction; safety review required"},
+  {"file":"context_safety/RoadAccidents001_x264.mp4","start":2,"end":18,"review":"Person/vehicle falls or slides into foreground; inspect onset and landing"},
+  {"file":"context_safety/Arrest002_x264.mp4","start":3,"end":23,"review":"Physical restraint/contact; safety review without assigning criminal intent"},
+  {"file":"context_safety/Arrest003_x264.mp4","start":7,"end":28.5,"review":"Physical struggle/fall; actor attribution requires care"},
+  {"file":"suspicious/Burglary017_x264.mp4","start":0,"end":22,"review":"Person climbs over counter and handles equipment behind it; review unusual access without assuming permission"},
+  {"file":"suspicious/Burglary005_x264.mp4","start":150,"end":170,"review":"Forceful doorway interaction; inspect contact sequence"},
+  {"file":"suspicious/Shoplifting001_x264.mp4","start":39,"end":68,"review":"People handle display merchandise; concealment/ownership unclear at this resolution"},
+  {"file":"suspicious/Stealing036_x264.mp4","start":20,"end":48,"review":"Person approaches pedestrians then moves away; inspect transfer/contact rather than assuming theft"},
+  {"file":"suspicious/Vandalism007_x264.mp4","start":14,"end":29,"review":"Person interacts near vehicles then moves away; inspect limbs/contact; do not invent car entry"},
+  {"file":"normal/Normal_Videos_003_x264.mp4","start":3,"end":32,"review":"Dog in passage; no human tasks"},
+  {"file":"normal/Normal_Videos_006_x264.mp4","start":0,"end":14.9,"review":"Ordinary road traffic; no visible collision"},
+  {"file":"normal/Normal_Videos_010_x264.mp4","start":0,"end":29,"review":"Person standing/moving in corridor; no concrete harm"},
+  {"file":"normal/Normal_Videos_014_x264.mp4","start":0,"end":20,"review":"Counter transaction and people leaving; ordinary object exchange"},
+  {"file":"normal/Normal_Videos_018_x264.mp4","start":0,"end":29,"review":"People walking or sitting in indoor hall; no concrete harm"}
+]
