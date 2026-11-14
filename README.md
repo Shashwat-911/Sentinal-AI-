@@ -1,5 +1,7 @@
 # SENTINEL AI
 
+> 🥈 **2nd Place — Project Exhibition:** Our team secured **second place among 70 teams** with Sentinel AI.
+
 SENTINEL AI is a desktop surveillance-analysis dashboard for person detection, persistent person tracking, behavior analysis, posture estimation, and non-modal incident review.
 
 The current application is person-only. It uses a YOLO person detector filtered to COCO class `0` and never displays or tracks luggage or other object classes.
