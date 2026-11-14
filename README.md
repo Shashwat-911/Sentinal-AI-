@@ -25,6 +25,8 @@ The current application is person-only. It uses a YOLO person detector filtered 
 - Privacy-preserving pose overlays with face keypoints excluded.
 - Non-modal incident feed with severity, timestamps, track IDs, evidence summaries, acknowledgement, dismissal, and snapshot paths.
 - Dataset verification, model training controls, training charts, session statistics, and PDF report export where supported by the current code.
+- **Dual-Pipeline AI-Weighted Decision Fusion**: 80% weight to Qwen3-VL local vision-language contextual referee / 20% to rule heuristics, resolving false alarms.
+- **Academic Project Exhibition Assets**: Print-ready A3 Exhibition Poster (`SENTINEL_AI_Poster_A3.pdf`), 300 DPI Poster PNG (`SENTINEL_AI_Poster_A3.png`), and complete interface walkthrough documentation (`SENTINEL_AI_Interface_Walkthrough.pdf`).
 
 ## What The System Does Not Do
 
