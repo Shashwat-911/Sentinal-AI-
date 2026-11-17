@@ -1,6 +1,6 @@
 # SENTINEL AI
 
-> 🥈 **2nd Place — Project Exhibition:** Our team secured **second place among 70 teams** with Sentinel AI.
+> 🥈 **2nd Place — Project Exhibition:** I secured **second place among 70 teams** with Sentinel AI.
 
 SENTINEL AI is a desktop surveillance-analysis dashboard for person detection, persistent person tracking, behavior analysis, posture estimation, and non-modal incident review.
 
